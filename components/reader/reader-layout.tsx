@@ -17,6 +17,9 @@ const themeStyles = {
       "--primary": "35 30% 25%",
       "--muted": "43 20% 94%",
       "--border": "43 15% 90%",
+      "--vault-mahogany": "#4a2c2a",
+      "--vault-sand": "#f4ece1",
+      "--vault-brass": "#c5a059",
   } as React.CSSProperties,
   "sepia-silk": {
       "--background": "38 28% 93%", // #F4EFE6
@@ -24,6 +27,9 @@ const themeStyles = {
       "--primary": "15 35% 35%",
       "--muted": "38 20% 88%",
       "--border": "38 15% 85%",
+      "--vault-mahogany": "#432D1F",
+      "--vault-sand": "#F4EFE6",
+      "--vault-brass": "#8C6B4A",
   } as React.CSSProperties,
   obsidian: {
       "--background": "0 0% 4%", // #0A0A0A
@@ -31,6 +37,9 @@ const themeStyles = {
       "--primary": "38 48% 56%", // Antique Brass
       "--muted": "0 0% 12%",
       "--border": "0 0% 15%",
+      "--vault-mahogany": "#121212",
+      "--vault-sand": "#D1D1D1",
+      "--vault-brass": "#C5A059",
   } as React.CSSProperties,
   slate: {
       "--background": "0 0% 11%", // #1C1C1C
@@ -38,6 +47,9 @@ const themeStyles = {
       "--primary": "215 25% 45%",
       "--muted": "0 0% 15%",
       "--border": "0 0% 20%",
+      "--vault-mahogany": "#1c1c1c",
+      "--vault-sand": "#a3afbf",
+      "--vault-brass": "#4a5568",
   } as React.CSSProperties,
   paper: {
       "--background": "43 30% 94%",
@@ -45,14 +57,19 @@ const themeStyles = {
       "--primary": "27 25% 40%",
       "--muted": "40 20% 88%",
       "--border": "27 15% 85%",
+      "--vault-mahogany": "#423D33",
+      "--vault-sand": "#F1EBE0",
+      "--vault-brass": "#8E7D6F",
   } as React.CSSProperties,
 };
 
 export function ReaderLayout({ children }: { children: React.ReactNode }) {
-  const { settings, showControls, setShowControls } = useReader();
+  const { settings, showControls, setShowControls, isMounted } = useReader();
 
   // Sync global CSS variables for the active theme
   useEffect(() => {
+    if (!isMounted) return;
+
     const root = document.documentElement;
     const currentThemeStyles = themeStyles[settings.theme as keyof typeof themeStyles];
     
@@ -70,7 +87,7 @@ export function ReaderLayout({ children }: { children: React.ReactNode }) {
         });
       }
     };
-  }, [settings.theme]);
+  }, [settings.theme, isMounted]);
 
   // Keyboard shortcuts (Escape to show/hide controls as well)
   useEffect(() => {
@@ -82,6 +99,8 @@ export function ReaderLayout({ children }: { children: React.ReactNode }) {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [showControls, setShowControls]);
+
+  if (!isMounted) return null;
 
   return (
     <div 

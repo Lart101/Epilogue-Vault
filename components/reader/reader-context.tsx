@@ -53,6 +53,7 @@ interface ReaderContextType extends ReaderState {
   setShowSidebar: (show: boolean) => void;
   toggleSidebar: () => void;
   triggerAction: (type: "next" | "prev") => void;
+  isMounted: boolean;
 }
 
 const ReaderContext = createContext<ReaderContextType | null>(null);
@@ -68,17 +69,23 @@ const DEFAULT_SETTINGS: ReaderSettings = {
 
 export function ReaderProvider({ children }: { children: React.ReactNode }) {
   // Load settings from local storage if available
-  const [settings, setSettingsState] = useState<ReaderSettings>(DEFAULT_SETTINGS);
-  
-  useEffect(() => {
-    const saved = localStorage.getItem("vault-reader-settings");
-    if (saved) {
-      try {
-        setSettingsState({ ...DEFAULT_SETTINGS, ...JSON.parse(saved) });
-      } catch (e) {
-        console.error("Failed to parse saved reader settings", e);
+  const [settings, setSettingsState] = useState<ReaderSettings>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("vault-reader-settings");
+      if (saved) {
+        try {
+          return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+        } catch (e) {
+          console.error("Failed to parse saved reader settings", e);
+        }
       }
     }
+    return DEFAULT_SETTINGS;
+  });
+  
+  const [isMounted, setIsMounted] = useState(false);
+  useEffect(() => {
+    setIsMounted(true);
   }, []);
 
   const [showControls, setShowControlsState] = useState(true);
@@ -143,7 +150,8 @@ export function ReaderProvider({ children }: { children: React.ReactNode }) {
     setShowSidebar,
     toggleSidebar,
     triggerAction,
-  }), [settings, showControls, meta, location, navigation, action, showSidebar, setSettings, setShowControls, toggleControls, setMeta, setLocation, navigate, setShowSidebar, toggleSidebar, triggerAction]);
+    isMounted,
+  }), [settings, showControls, meta, location, navigation, action, showSidebar, setSettings, setShowControls, toggleControls, setMeta, setLocation, navigate, setShowSidebar, toggleSidebar, triggerAction, isMounted]);
 
   return (
     <ReaderContext.Provider value={contextValue}>
