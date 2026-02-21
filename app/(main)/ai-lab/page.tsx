@@ -83,22 +83,37 @@ export default function ResonanceLab() {
   };
 
   const handlePlayEpisodeFromDetail = (episode: Episode, _season: Season) => {
-    if (!userId) return;
+    if (!userId || !detailArtifact || !detailBook) return;
+
+    const sc = detailArtifact.content as any;
+    const allEpisodes = (sc.seasons || []).flatMap((s: any) => s.episodes);
+    const index = allEpisodes.findIndex((e: any) => e.number === episode.number);
+
+    const normalizedSeries: PodcastSeries = {
+      id: detailArtifact.id, 
+      bookId: detailBook.id, 
+      createdAt: detailArtifact.createdAt,
+      title: sc.title || detailBook.title, 
+      tone: sc.tone || "philosophical",
+      totalSeasons: sc.totalSeasons || 1,
+      seasons: sc.seasons || [{ number: 1, title: "Archive Echoes", description: "", episodes: sc.episodes || [] }],
+      episodes: sc.episodes,
+    };
 
     // 1. FAST PATH: Did background generation already build and attach the script?
     if (episode.script) {
-      playerStore.play(episode.script, detailBook, episode.title);
+      playerStore.play(episode.script, detailBook, episode.title, normalizedSeries, index);
       return;
     }
 
     // 2. DB PATH: Was it generated separately in the past?
     getUserAiArtifacts(userId, "podcast").then(artifacts => {
       const match = artifacts.find(a =>
-        a.title === episode.title || a.content?.title === episode.title
+        a.book_id === detailBook.id && a.content?.episodeNumber === episode.number
       );
 
       if (match) {
-        playerStore.play(match.content as PodcastScript, detailBook, episode.title);
+        playerStore.play(match.content as PodcastScript, detailBook, episode.title, normalizedSeries, index);
       } else {
         // 3. FALLBACK PATH: Generate it right now on demand.
         handleGenerateEpisodeFromDetail(episode, _season);
@@ -112,6 +127,9 @@ export default function ResonanceLab() {
 
     try {
       const sc = detailArtifact.content as any;
+      const allEpisodes = (sc.seasons || []).flatMap((s: any) => s.episodes);
+      const index = allEpisodes.findIndex((e: any) => e.number === episode.number);
+
       const normalizedSeries: PodcastSeries = {
         id: detailArtifact.id, bookId: detailBook.id, createdAt: detailArtifact.createdAt,
         title: sc.title || detailBook.title, tone: sc.tone || "philosophical",
@@ -119,10 +137,13 @@ export default function ResonanceLab() {
         seasons: sc.seasons || [{ number: 1, title: "Archive Echoes", description: "", episodes: sc.episodes || [] }],
         episodes: sc.episodes,
       };
+
+      playerStore.setGenerating(detailBook, episode.title, normalizedSeries, index);
+
       const scriptResult = await generateEpisodeScript(normalizedSeries,
         { ...episode, id: episode.id || `ep-${episode.number}` }, "");
       await saveAiArtifact(userId, { book_id: detailBook.id, type: "podcast", title: episode.title, content: scriptResult });
-      playerStore.setScript(scriptResult);
+      playerStore.play(scriptResult, detailBook, episode.title, normalizedSeries, index);
       toast.success(`"${episode.title}" is ready to play!`);
     } catch (err: any) {
       toast.error("Generation failed: " + (err.message || "Unknown error"));

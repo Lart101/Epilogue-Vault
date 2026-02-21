@@ -172,9 +172,17 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
 
         if (match) {
           const loadedScript = match.content as PodcastScript;
+          const allEpisodes = (series?.seasons || []).flatMap((s: any) => s.episodes);
+          const index = allEpisodes.findIndex((e: any) => e.number === episode.number);
+          const normalizedSeries: PodcastSeries = {
+            id: "", bookId: book.id, createdAt: "",
+            ...series!,
+            seasons: series!.seasons || [{ number: 1, title: "Archive Echoes", description: "", episodes: series!.episodes || [] }],
+          };
+
           setScript(loadedScript);
           setStep("playing");
-          playerStore.play(loadedScript, book, `${series?.title} · Ep ${episode.number}: ${episode.title}`);
+          playerStore.play(loadedScript, book, `${series?.title} · Ep ${episode.number}: ${episode.title}`, normalizedSeries, index);
           return;
         }
       } catch (err) {
@@ -195,11 +203,14 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
         seasons: series.seasons || [{ number: 1, title: "Archive Echoes", description: "", episodes: series.episodes || [] }],
       };
 
+      const allEpisodes = (series.seasons || []).flatMap((s: any) => s.episodes);
+      const index = allEpisodes.findIndex((e: any) => e.number === episode.number);
+
       const result = await generateEpisodeScript(normalizedSeries, episode, "");
       setScript(result);
       setStep("playing");
       // Also dispatch to global persistent player — survives closing the modal
-      playerStore.play(result, book, `${series?.title} · Ep ${episode.number}: ${episode.title}`);
+      playerStore.play(result, book, `${series?.title} · Ep ${episode.number}: ${episode.title}`, normalizedSeries, index);
 
       await saveAiArtifact(book.user_id, {
         book_id: book.id,

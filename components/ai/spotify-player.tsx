@@ -7,13 +7,16 @@ import {
   X, Loader2, ChevronDown, Radio
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { PodcastScript } from "@/lib/gemini";
+import { PodcastScript, PodcastSeries } from "@/lib/gemini";
 import { UserBook } from "@/lib/db";
 import { cn } from "@/lib/utils";
+import { playerStore } from "@/lib/player-store";
 
 interface SpotifyPlayerProps {
   script: PodcastScript | null;
   book: UserBook | null;
+  series?: PodcastSeries | null;
+  episodeIndex?: number;
   episodeTitle?: string;
   isGenerating?: boolean;
   onClose: () => void;
@@ -21,7 +24,7 @@ interface SpotifyPlayerProps {
 }
 
 export function SpotifyPlayer({ 
-  script, book, episodeTitle, isGenerating = false, onClose, onExpand 
+  script, book, series, episodeIndex = -1, episodeTitle, isGenerating = false, onClose, onExpand 
 }: SpotifyPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoadingAudio, setIsLoadingAudio] = useState(false);
@@ -37,10 +40,24 @@ export function SpotifyPlayer({
   // Reset state on script change
   useEffect(() => {
     setCurrentLineIndex(0);
+    
+    // Auto-play if the store indicates we should be playing (e.g. after skip)
+    const storeState = playerStore.getState();
+    if (script && storeState.isPlaying && !isGenerating) {
+      // Small delay to ensure state is settled
+      const timer = setTimeout(() => {
+        playAudioLine(0);
+      }, 100);
+      return () => {
+        clearTimeout(timer);
+        stopAndCleanup();
+      };
+    }
+
     return () => {
       stopAndCleanup();
     };
-  }, [script]);
+  }, [script, isGenerating]);
 
   // Handle page visibility/unload
   useEffect(() => {
@@ -174,12 +191,23 @@ export function SpotifyPlayer({
   }, [currentLineIndex, isExpanded]);
 
   const skipBack = () => {
+    if (series && episodeIndex > 0) {
+      playerStore.navigateToEpisode(episodeIndex - 1);
+      return;
+    }
     const prev = Math.max(0, currentLineIndex - 1);
     setCurrentLineIndex(prev);
     if (isPlaying || isLoadingAudio) playAudioLine(prev);
   };
 
   const skipForward = () => {
+    if (series) {
+      const episodes = series.seasons.flatMap(s => s.episodes);
+      if (episodeIndex < episodes.length - 1) {
+        playerStore.navigateToEpisode(episodeIndex + 1);
+        return;
+      }
+    }
     const next = Math.min((script?.dialogue.length || 1) - 1, currentLineIndex + 1);
     setCurrentLineIndex(next);
     if (isPlaying || isLoadingAudio) playAudioLine(next);

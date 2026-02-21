@@ -1,13 +1,12 @@
-/**
- * Global player store — persists episode playback across page navigation.
- */
-import { PodcastScript } from "@/lib/gemini";
+import { PodcastScript, PodcastSeries, Episode } from "@/lib/gemini";
 import { UserBook } from "@/lib/db";
 
 export interface PlayerState {
     script: PodcastScript | null;
     book: UserBook | null;
+    series: PodcastSeries | null;
     episodeTitle: string;
+    currentEpisodeIndex: number;
     currentLineIndex: number;
     isPlaying: boolean;
     isGenerating: boolean;
@@ -16,7 +15,9 @@ export interface PlayerState {
 const defaultState: PlayerState = {
     script: null,
     book: null,
+    series: null,
     episodeTitle: "",
+    currentEpisodeIndex: -1,
     currentLineIndex: 0,
     isPlaying: false,
     isGenerating: false,
@@ -28,6 +29,12 @@ class PlayerStore {
     private state: PlayerState = { ...defaultState };
     private listeners: Set<Listener> = new Set();
 
+    /**
+     * Optional handler for when the user clicks "Next/Prev" on the player
+     * while a series is active.
+     */
+    public onNavigateEpisode?: (episode: Episode, index: number) => void;
+
     subscribe(fn: Listener) {
         this.listeners.add(fn);
         return () => this.listeners.delete(fn);
@@ -37,13 +44,32 @@ class PlayerStore {
         this.listeners.forEach(fn => fn({ ...this.state }));
     }
 
-    play(script: PodcastScript, book: UserBook | null, episodeTitle: string) {
-        this.state = { script, book, episodeTitle, currentLineIndex: 0, isPlaying: true, isGenerating: false };
+    play(script: PodcastScript, book: UserBook | null, episodeTitle: string, series?: PodcastSeries, episodeIndex?: number) {
+        this.state = {
+            ...this.state,
+            script,
+            book,
+            series: series || null,
+            episodeTitle,
+            currentEpisodeIndex: episodeIndex ?? -1,
+            currentLineIndex: 0,
+            isPlaying: true,
+            isGenerating: false
+        };
         this.notify();
     }
 
-    setGenerating(book: UserBook | null, episodeTitle: string) {
-        this.state = { ...this.state, script: null, book, episodeTitle, isGenerating: true, isPlaying: false };
+    setGenerating(book: UserBook | null, episodeTitle: string, series?: PodcastSeries, episodeIndex?: number) {
+        this.state = {
+            ...this.state,
+            script: null,
+            book,
+            series: series || null,
+            episodeTitle,
+            currentEpisodeIndex: episodeIndex ?? -1,
+            isGenerating: true,
+            isPlaying: false
+        };
         this.notify();
     }
 
@@ -60,6 +86,15 @@ class PlayerStore {
     setLineIndex(index: number) {
         this.state = { ...this.state, currentLineIndex: index };
         this.notify();
+    }
+
+    navigateToEpisode(index: number) {
+        if (!this.state.series || !this.onNavigateEpisode) return;
+        const episodes = this.state.series.seasons.flatMap(s => s.episodes);
+        const target = episodes[index];
+        if (target) {
+            this.onNavigateEpisode(target, index);
+        }
     }
 
     close() {
