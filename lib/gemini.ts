@@ -1,12 +1,13 @@
 import Groq from "groq-sdk";
 
-// Ordered array of Groq models from best/latest to fastest.
-// If the primary model hits a rate limit, the system automatically falls back to the next one.
+// Ordered array of Groq models to maximize throughput and minimize rate-limit errors (429s).
+// Sorted generally from highest TPM to lowest to ensure the primary generator doesn't easily hit a wall.
 const FALLBACK_MODELS = [
-    "llama-3.3-70b-versatile", // Primary (Deep reasoning)
-    "llama3-70b-8192",         // Fallback 1
-    "mixtral-8x7b-32768",      // Fallback 2 (Price-performance/Latency)
-    "llama3-8b-8192",          // Fallback 3 (Budget friendly/Fast)
+    "llama-4-scout-instruct",  // Best Efficiency (30,000 TPM)
+    "llama-3.3-70b-versatile", // Highest Quality (12,000 TPM)
+    "gpt-oss-20b",             // Fastest Response (8,000 TPM)
+    "llama-3.1-8b-instant",    // Fast, lightweight (6,000 TPM)
+    "qwen3-32b",               // Balanced backup (6,000 TPM)
 ];
 
 export interface Episode {
