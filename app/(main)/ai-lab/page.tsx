@@ -84,13 +84,23 @@ export default function ResonanceLab() {
 
   const handlePlayEpisodeFromDetail = (episode: Episode, _season: Season) => {
     if (!userId) return;
+
+    // 1. FAST PATH: Did background generation already build and attach the script?
+    if (episode.script) {
+      playerStore.play(episode.script, detailBook, episode.title);
+      return;
+    }
+
+    // 2. DB PATH: Was it generated separately in the past?
     getUserAiArtifacts(userId, "podcast").then(artifacts => {
       const match = artifacts.find(a =>
         a.title === episode.title || a.content?.title === episode.title
       );
+
       if (match) {
         playerStore.play(match.content as PodcastScript, detailBook, episode.title);
       } else {
+        // 3. FALLBACK PATH: Generate it right now on demand.
         handleGenerateEpisodeFromDetail(episode, _season);
       }
     });
@@ -98,8 +108,8 @@ export default function ResonanceLab() {
 
   const handleGenerateEpisodeFromDetail = async (episode: Episode, season: Season) => {
     if (!userId || !detailArtifact || !detailBook) return;
-    const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY || localStorage.getItem("GEMINI_API_KEY") || "";
-    if (!apiKey) { toast.error("No Gemini API key. Visit Settings to add one."); return; }
+    const apiKey = process.env.NEXT_PUBLIC_GROQ_API_KEY || localStorage.getItem("GROQ_API_KEY") || "";
+    if (!apiKey) { toast.error("No Groq API key. Visit Settings to add one."); return; }
 
     playerStore.setGenerating(detailBook, episode.title);
 

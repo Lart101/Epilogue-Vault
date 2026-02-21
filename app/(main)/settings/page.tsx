@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export default function SettingsPage() {
   const { user } = useAuth();
@@ -37,10 +38,15 @@ export default function SettingsPage() {
   const [showPasswords, setShowPasswords] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
 
+  // Purge confirmation state
+  type PurgeTarget = { type: "book"; id: string; label: string } | { type: "artifact"; id: string; label: string };
+  const [pendingPurge, setPendingPurge] = useState<PurgeTarget | null>(null);
+  const [isPurging, setIsPurging] = useState(false);
+
   useEffect(() => {
     if (user) {
       loadTrash();
-      const savedKey = localStorage.getItem("GEMINI_API_KEY") || process.env.NEXT_PUBLIC_GEMINI_API_KEY || "";
+      const savedKey = localStorage.getItem("GROQ_API_KEY") || process.env.NEXT_PUBLIC_GROQ_API_KEY || "";
       setApiKey(savedKey);
     }
   }, [user]);
@@ -80,26 +86,26 @@ export default function SettingsPage() {
     } catch { toast.error("Restoration failed."); }
   };
 
-  const handlePermanentDeleteBook = async (id: string) => {
-    if (!user || !confirm("Permanently erase this volume? This cannot be undone.")) return;
+  const handleConfirmPurge = async () => {
+    if (!user || !pendingPurge) return;
+    setIsPurging(true);
     try {
-      await deleteBook(user.id, id);
-      setTrashedBooks(prev => prev.filter(b => b.id !== id));
-      toast.success("Volume permanently erased.");
+      if (pendingPurge.type === "book") {
+        await deleteBook(user.id, pendingPurge.id);
+        setTrashedBooks(prev => prev.filter(b => b.id !== pendingPurge.id));
+        toast.success("Volume permanently erased.");
+      } else {
+        await deleteAiArtifact(user.id, pendingPurge.id);
+        setTrashedArtifacts(prev => prev.filter(a => a.id !== pendingPurge.id));
+        toast.success("Echo permanently erased.");
+      }
+      setPendingPurge(null);
     } catch { toast.error("Purging failed."); }
-  };
-
-  const handlePermanentDeleteArtifact = async (id: string) => {
-    if (!user || !confirm("Permanently erase this resonance echo?")) return;
-    try {
-      await deleteAiArtifact(user.id, id);
-      setTrashedArtifacts(prev => prev.filter(a => a.id !== id));
-      toast.success("Echo permanently erased.");
-    } catch { toast.error("Purging failed."); }
+    finally { setIsPurging(false); }
   };
 
   const saveApiKey = () => {
-    localStorage.setItem("GEMINI_API_KEY", apiKey);
+    localStorage.setItem("GROQ_API_KEY", apiKey);
     toast.success("Aether credentials updated.");
   };
 
@@ -377,7 +383,8 @@ export default function SettingsPage() {
                             className="rounded-xl gap-2 hover:bg-green-500/10 hover:text-green-500 transition-colors">
                             <RotateCcw className="w-3.5 h-3.5" /> Restore
                           </Button>
-                          <Button size="sm" variant="ghost" onClick={() => handlePermanentDeleteBook(book.id)}
+                          <Button size="sm" variant="ghost"
+                            onClick={() => setPendingPurge({ type: "book", id: book.id, label: book.title })}
                             className="rounded-xl gap-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors">
                             <ShieldAlert className="w-3.5 h-3.5" /> Purge
                           </Button>
@@ -433,7 +440,8 @@ export default function SettingsPage() {
                             className="rounded-xl gap-2 hover:bg-green-500/10 hover:text-green-500 transition-colors">
                             <RotateCcw className="w-3.5 h-3.5" /> Restore
                           </Button>
-                          <Button size="sm" variant="ghost" onClick={() => handlePermanentDeleteArtifact(artifact.id)}
+                          <Button size="sm" variant="ghost"
+                            onClick={() => setPendingPurge({ type: "artifact", id: artifact.id, label: artifact.title })}
                             className="rounded-xl gap-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors">
                             <ShieldAlert className="w-3.5 h-3.5" /> Purge
                           </Button>
@@ -447,6 +455,18 @@ export default function SettingsPage() {
           </section>
         </TabsContent>
       </Tabs>
+
+      {/* Purge confirmation dialog */}
+      <ConfirmDialog
+        open={!!pendingPurge}
+        onClose={() => setPendingPurge(null)}
+        onConfirm={handleConfirmPurge}
+        isLoading={isPurging}
+        title={pendingPurge?.type === "book" ? "Permanently Erase Volume?" : "Permanently Erase Echo?"}
+        description={`"${pendingPurge?.label}" will be permanently deleted. This action cannot be undone.`}
+        confirmLabel="Erase Forever"
+        variant="danger"
+      />
     </div>
   );
 }

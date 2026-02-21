@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { UserBook } from "@/lib/db";
+import { UserBook, getUserAiArtifacts } from "@/lib/db";
 import { extractEpubText, extractPdfText } from "@/lib/extractors";
 import {
   generateEpisodeScript, generateSeriesOutline,
@@ -98,11 +98,11 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
   const [step, setStep] = useState<Step>(
     initialScript ? "playing"
       : initialSeries ? "selectEpisode"
-      : process.env.NEXT_PUBLIC_GEMINI_API_KEY ? "selectTone"
+      : process.env.NEXT_PUBLIC_GROQ_API_KEY ? "selectTone"
       : "apiKey"
   );
 
-  const [apiKey, setApiKey] = useState(process.env.NEXT_PUBLIC_GEMINI_API_KEY || "");
+  const [apiKey, setApiKey] = useState(process.env.NEXT_PUBLIC_GROQ_API_KEY || "");
   const [selectedTone, setSelectedTone] = useState(PODCAST_TONES[0]);
   const [series, setSeries] = useState<Omit<PodcastSeries, "id" | "bookId" | "createdAt"> | null>(initialSeries || null);
   const [selectedSeasonNumber, setSelectedSeasonNumber] = useState(1);
@@ -119,10 +119,10 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
 
   useEffect(() => {
     synthRef.current = typeof window !== "undefined" ? window.speechSynthesis : null;
-    const envKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+    const envKey = process.env.NEXT_PUBLIC_GROQ_API_KEY;
     if (envKey) setApiKey(envKey);
     else {
-      const saved = localStorage.getItem("GEMINI_API_KEY") || localStorage.getItem("gemini-api-key");
+      const saved = localStorage.getItem("GROQ_API_KEY") || localStorage.getItem("groq-api-key");
       if (saved) setApiKey(saved);
     }
     return () => synthRef.current?.cancel();
@@ -168,6 +168,30 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
   };
 
   const handleGenerateEpisode = async (episode: Episode) => {
+    // Fast path: if it's already generated, fetch it and play it immediately
+    if (readyEpisodes.has(episode.number)) {
+      try {
+        const artifacts = await getUserAiArtifacts(book.user_id, "podcast");
+        
+        // Exact same matching logic as in page.tsx
+        const match = artifacts.find(a => 
+          a.title === episode.title || 
+          a.content?.title === episode.title ||
+          (a.title.includes(`Ep ${episode.number}:`) && a.title.includes(selectedTone.label))
+        );
+
+        if (match) {
+          const loadedScript = match.content as PodcastScript;
+          setScript(loadedScript);
+          setStep("playing");
+          playerStore.play(loadedScript, book, `${series?.title} · Ep ${episode.number}: ${episode.title}`);
+          return;
+        }
+      } catch (err) {
+        console.warn("Failed to load cached script, falling back to generation.");
+      }
+    }
+
     setCurrentEpisode(episode);
     setIsGeneratingEpisode(true);
     setEpisodeError(null);
@@ -324,7 +348,7 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
                 className="h-12 rounded-2xl border-border/40 px-5 font-mono text-sm"
               />
               <Button
-                onClick={() => { localStorage.setItem("GEMINI_API_KEY", apiKey); setStep("selectTone"); }}
+                onClick={() => { localStorage.setItem("GROQ_API_KEY", apiKey); setStep("selectTone"); }}
                 disabled={!apiKey}
                 className="w-full h-11 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white"
               >

@@ -1,6 +1,13 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import Groq from "groq-sdk";
 
-const MODEL_NAME = "gemini-3-flash-preview"; // Latest model in preview state
+// Ordered array of Groq models from best/latest to fastest.
+// If the primary model hits a rate limit, the system automatically falls back to the next one.
+const FALLBACK_MODELS = [
+    "llama-3.3-70b-versatile", // Primary (Deep reasoning)
+    "llama3-70b-8192",         // Fallback 1
+    "mixtral-8x7b-32768",      // Fallback 2 (Price-performance/Latency)
+    "llama3-8b-8192",          // Fallback 3 (Budget friendly/Fast)
+];
 
 export interface Episode {
     id: string;
@@ -62,8 +69,7 @@ export async function generateSeriesOutline(
     extractedContent: string,
     tone: string
 ): Promise<Omit<PodcastSeries, "id" | "bookId" | "createdAt">> {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: MODEL_NAME });
+    // We instantiate Groq inside the fallback executor now.
 
     const prompt = `
     You are an award-winning podcast producer. 
@@ -95,12 +101,12 @@ export async function generateSeriesOutline(
         }
       ]
     }
+
+    - CRITICAL JSON RULE: Do NOT use unescaped double quotes inside string values (especially for "title" or "description"). If you need to quote something, use 'single quotes' or escape them like \\\"this\\\". Unescaped double quotes will corrupt the JSON.
     `;
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
-    return parseGeminiJson(text);
+    const text = await executeWithFallback(apiKey, prompt);
+    return parseGroqJson(text);
 }
 
 /**
@@ -114,8 +120,7 @@ export async function generateEpisodeScript(
     previousEpisodeSummary?: string,
     nextEpisodeTease?: string
 ): Promise<PodcastScript> {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: MODEL_NAME });
+    // We instantiate Groq inside the fallback executor now.
 
     const currentSeason = series.seasons.find(s => s.episodes.some(e => e.id === episode.id)) || series.seasons[0];
     const episodeInSeason = currentSeason.episodes.findIndex(e => e.id === episode.id) + 1;
@@ -140,11 +145,11 @@ Here is the context for this episode:
 
 **SCRIPT REQUIREMENTS & FORMATTING:**
 
-1. **Host Setup:** Format the script for 2 hosts (Host A and Host B, ensuring natural chemistry, interruptions, and banter).
-2. **Audio Cues:** Include professional audio production cues in brackets and italics (e.g., *[SFX: Pages turning quickly]*, *[MUSIC: Mysterious ambient synth fades in]*).
+1. **Host Setup:** Format the script for 2 hosts. Invent TWO COMPLETELY RANDOM FIRST NAMES for the hosts (e.g., "Sarah" and "Marcus", or "Liam" and "Chloe"). Ensure they have natural chemistry, interruptions, and banter.
+2. **Strictly Spoken Word Only:** Write ONLY the exact spoken dialogue. Do NOT include any stage directions, audio cues, or sound effects (e.g., absolutely no [SFX], [MUSIC], or *laughs*). The text goes directly to a strict Text-to-Speech engine that will literally read "bracket SFX bracket" out loud.
 3. **Pacing:** Vary the pacing. Use short, punchy sentences for tension, and longer, reflective dialogue for deep analysis.
 4. **Structure:**
-   - **The Hook (0:00 - 1:30):** Start with a provocative question, a shocking quote from the text, or a captivating scenario related to the content before the intro music hits.
+   - **The Hook (First 1-2 minutes):** Start with a provocative question, a shocking quote from the text, or a captivating scenario related to the content.
    - **Intro & Continuity:** Welcome the listener. Briefly acknowledge the tone vibe. Seamlessly weave in a 2-sentence reference to the season's thematic journey.
    - **Main Exploration:** Dive deep into the content. Do not just summarize; analyze, debate, and relate the text to broader human experiences or real-world examples. 
    - **The "Echo" Segment:** Include a dedicated segment where the host(s) pause to deeply analyze one specific, profound quote or moment from the provided text.
@@ -154,6 +159,7 @@ Here is the context for this episode:
 - Avoid robotic transitions like "Moving on to the next point."
 - Make the dialogue sound spoken, not read. Use colloquialisms appropriate to the tone.
 - Ensure the script runtime is approximately 5-8 minutes of spoken audio.
+- CRITICAL JSON RULE: Do NOT use unescaped double quotes inside string values (especially for the "text" field). If you need to quote a phrase or show emphasis, use 'single quotes' or escape them like \\\"this\\\". Unescaped double quotes will corrupt the JSON.
 
 Format the output as a JSON object:
 {
@@ -161,28 +167,116 @@ Format the output as a JSON object:
   "episodeNumber": ${episode.number},
   "tone": "${series.tone}",
   "dialogue": [
-    { "speaker": "Host A", "text": "..." },
-    { "speaker": "Host B", "text": "..." }
+    { "speaker": "[Random Host 1]", "text": "..." },
+    { "speaker": "[Random Host 2]", "text": "..." }
   ]
 }
 `;
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
-    return parseGeminiJson(text);
+    const text = await executeWithFallback(apiKey, prompt);
+    return parseGroqJson(text);
 }
 
 
-function parseGeminiJson(text: string) {
+function parseGroqJson(text: string) {
     try {
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-            return JSON.parse(jsonMatch[0]);
+        // Strip markdown formatting if present
+        let clean = text.trim();
+        if (clean.startsWith('```json')) {
+            clean = clean.replace(/^```json/, '');
+        } else if (clean.startsWith('```')) {
+            clean = clean.replace(/^```/, '');
         }
-        throw new Error("No JSON found in response");
-    } catch (e) {
-        console.error("Failed to parse Gemini response:", text);
-        throw new Error("Failed to generate a valid AI response.");
+        if (clean.endsWith('```')) {
+            clean = clean.replace(/```$/, '');
+        }
+
+        clean = clean.trim();
+
+        // Fallback: extract just the object or array if extra text surrounds it
+        const jsonMatch = clean.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+
+        let jsonString = jsonMatch ? jsonMatch[0] : clean;
+
+        // Common LLM fixes: Remove trailing commas before closing braces/brackets
+        jsonString = jsonString.replace(/,\s*([}\]])/g, '$1');
+
+        try {
+            return JSON.parse(jsonString);
+        } catch (parseErr: any) {
+            // Secondary attempt: escape unescaped literal newlines in string properties
+            // (Gemini sometimes accidentally outputs literal newlines instead of \n)
+            const sanitizedString = jsonString.replace(/[\u0000-\u001F]+/g, (match) => {
+                // If it's pure whitespace structural spacing, it's fine, but 
+                // inside quotes it breaks JSON.parse. A blanket remove of dangerous controls can help.
+                if (match === '\n' || match === '\r' || match === '\t') return match;
+                return ''; // strip other control chars
+            });
+
+            try {
+                return JSON.parse(sanitizedString);
+            } catch (secondErr: any) {
+                console.error("[Groq JSON Parse Error]:", parseErr.message);
+                throw parseErr;
+            }
+        }
+    } catch (e: any) {
+        console.error("[Groq Parser Root Error]:", e.message);
+        console.error("Raw Text segment:", text.substring(0, 500) + "...");
+        throw new Error("Failed to extract valid JSON from the AI response.");
     }
+}
+
+/**
+ * Cascading executor that iterates through our FALLBACK_MODELS on Groq.
+ * For each model, it will attempt up to 'maxRetries' times if it hits a 429 or 503.
+ */
+async function executeWithFallback(apiKey: string, prompt: string, maxRetriesPerModel = 2): Promise<string> {
+    const groq = new Groq({ apiKey, dangerouslyAllowBrowser: true });
+    let lastError: any = null;
+
+    for (const modelName of FALLBACK_MODELS) {
+        console.log(`[Groq] Attempting generation with model: ${modelName}`);
+        let retries = 0;
+
+        while (retries <= maxRetriesPerModel) {
+            try {
+                const completion = await groq.chat.completions.create({
+                    messages: [{ role: "user", content: prompt }],
+                    model: modelName,
+                    response_format: { type: "json_object" },
+                    temperature: 0.7,
+                });
+                return completion.choices[0]?.message?.content || "";
+            } catch (error: any) {
+                lastError = error;
+                const isRateLimit = error.status === 429;
+                const isOverloaded = error.status === 503;
+
+                if (!isRateLimit && !isOverloaded) {
+                    console.error(`[Groq] Fatal error on ${modelName}, aborting model.`, error.message);
+                    break;
+                }
+
+                retries++;
+
+                if (isRateLimit) {
+                    console.warn(`[Groq API] ${modelName} hit 429 Rate Limit. Instantly falling back to next model...`);
+                    break;
+                }
+
+                if (retries <= maxRetriesPerModel) {
+                    const baseDelay = 5000;
+                    const waitTime = baseDelay * retries;
+                    console.warn(`[Groq API] ${modelName} hit 503 Overloaded. Retrying in ${waitTime / 1000}s... (Attempt ${retries}/${maxRetriesPerModel})`);
+                    await new Promise((resolve) => setTimeout(resolve, waitTime));
+                } else {
+                    console.warn(`[Groq API] ${modelName} exhausted limits. Falling back to next model...`);
+                }
+            }
+        }
+    }
+
+    console.error("[Groq API] ALL fallback models exhausted.", lastError);
+    throw new Error(lastError?.message || "Complete API failure across all fallback models.");
 }
