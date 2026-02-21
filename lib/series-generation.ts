@@ -17,7 +17,6 @@ export type OnEpisodeDone = (episodeNumber: number, episodeTitle: string) => voi
 export type OnEpisodeFailed = (episodeNumber: number, episodeTitle: string) => void;
 
 export async function runFullSeriesGeneration(
-    apiKey: string,
     book: UserBook,
     tone: typeof PODCAST_TONES[0],
     onSeriesOutlineDone?: OnSeriesDone,
@@ -50,7 +49,7 @@ export async function runFullSeriesGeneration(
         // ── 2. Generate series outline ────────────────────────────────────────
         generationStore.update(jobId, { status: "planning", label: "Architecting series..." });
 
-        const outline = await generateSeriesOutline(apiKey, book.title, book.author, text, tone.label);
+        const outline = await generateSeriesOutline(book.title, book.author, text, tone.label);
         const outlineWithTone = { ...outline, tone: tone.label, _toneId: tone.id };
 
         await saveAiArtifact(book.user_id, {
@@ -95,7 +94,7 @@ export async function runFullSeriesGeneration(
             });
 
             try {
-                const scriptResult = await generateEpisodeScript(apiKey, normalizedSeries, episode, text);
+                const scriptResult = await generateEpisodeScript(normalizedSeries, episode, text);
 
                 await saveAiArtifact(book.user_id, {
                     book_id: book.id,
@@ -156,7 +155,6 @@ export async function runFullSeriesGeneration(
  * Already-generated episode numbers (readySet) are skipped.
  */
 export async function retryFailedEpisodes(
-    apiKey: string,
     book: UserBook,
     series: Omit<PodcastSeries, "id" | "bookId" | "createdAt">,
     failedEpisodeNumbers: Set<number>,
@@ -201,7 +199,7 @@ export async function retryFailedEpisodes(
         });
 
         try {
-            const scriptResult = await generateEpisodeScript(apiKey, normalizedSeries, episode, "");
+            const scriptResult = await generateEpisodeScript(normalizedSeries, episode, "");
 
             await saveAiArtifact(book.user_id, {
                 book_id: book.id,

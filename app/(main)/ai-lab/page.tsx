@@ -108,9 +108,6 @@ export default function ResonanceLab() {
 
   const handleGenerateEpisodeFromDetail = async (episode: Episode, season: Season) => {
     if (!userId || !detailArtifact || !detailBook) return;
-    const apiKey = process.env.NEXT_PUBLIC_GROQ_API_KEY || localStorage.getItem("GROQ_API_KEY") || "";
-    if (!apiKey) { toast.error("No Groq API key. Visit Settings to add one."); return; }
-
     playerStore.setGenerating(detailBook, episode.title);
 
     try {
@@ -122,7 +119,7 @@ export default function ResonanceLab() {
         seasons: sc.seasons || [{ number: 1, title: "Archive Echoes", description: "", episodes: sc.episodes || [] }],
         episodes: sc.episodes,
       };
-      const scriptResult = await generateEpisodeScript(apiKey, normalizedSeries,
+      const scriptResult = await generateEpisodeScript(normalizedSeries,
         { ...episode, id: episode.id || `ep-${episode.number}` }, "");
       await saveAiArtifact(userId, { book_id: detailBook.id, type: "podcast", title: episode.title, content: scriptResult });
       playerStore.setScript(scriptResult);

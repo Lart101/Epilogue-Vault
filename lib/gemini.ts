@@ -3,11 +3,11 @@ import Groq from "groq-sdk";
 // Ordered array of Groq models to maximize throughput and minimize rate-limit errors (429s).
 // Sorted generally from highest TPM to lowest to ensure the primary generator doesn't easily hit a wall.
 const FALLBACK_MODELS = [
-    "llama-4-scout-instruct",  // Best Efficiency (30,000 TPM)
-    "llama-3.3-70b-versatile", // Highest Quality (12,000 TPM)
-    "gpt-oss-20b",             // Fastest Response (8,000 TPM)
-    "llama-3.1-8b-instant",    // Fast, lightweight (6,000 TPM)
-    "qwen3-32b",               // Balanced backup (6,000 TPM)
+    "llama-3.3-70b-versatile",
+    "llama-3.1-70b-versatile",
+    "llama-3.1-8b-instant",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it",
 ];
 
 export interface Episode {
@@ -64,7 +64,6 @@ export const PODCAST_TONES = [
  * Step 1: Generate a series outline based on the book content
  */
 export async function generateSeriesOutline(
-    apiKey: string,
     bookTitle: string,
     bookAuthor: string,
     extractedContent: string,
@@ -106,7 +105,7 @@ export async function generateSeriesOutline(
     - CRITICAL JSON RULE: Do NOT use unescaped double quotes inside string values (especially for "title" or "description"). If you need to quote something, use 'single quotes' or escape them like \\\"this\\\". Unescaped double quotes will corrupt the JSON.
     `;
 
-    const text = await executeWithFallback(apiKey, prompt);
+    const text = await executeWithFallback(prompt);
     return parseGroqJson(text);
 }
 
@@ -114,7 +113,6 @@ export async function generateSeriesOutline(
  * Step 2: Generate a professional script for a specific episode
  */
 export async function generateEpisodeScript(
-    apiKey: string,
     series: PodcastSeries,
     episode: Episode,
     extractedContent: string,
@@ -174,7 +172,7 @@ Format the output as a JSON object:
 }
 `;
 
-    const text = await executeWithFallback(apiKey, prompt);
+    const text = await executeWithFallback(prompt);
     return parseGroqJson(text);
 }
 
@@ -232,7 +230,11 @@ function parseGroqJson(text: string) {
  * Cascading executor that iterates through our FALLBACK_MODELS on Groq.
  * For each model, it will attempt up to 'maxRetries' times if it hits a 429 or 503.
  */
-async function executeWithFallback(apiKey: string, prompt: string, maxRetriesPerModel = 2): Promise<string> {
+async function executeWithFallback(prompt: string, maxRetriesPerModel = 2): Promise<string> {
+    const apiKey = process.env.NEXT_PUBLIC_GROQ_API_KEY;
+    if (!apiKey) {
+        throw new Error("Aether credentials (API Key) not found in environment.");
+    }
     const groq = new Groq({ apiKey, dangerouslyAllowBrowser: true });
     let lastError: any = null;
 

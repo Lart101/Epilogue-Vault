@@ -38,7 +38,6 @@ interface EchoGeneratorProps {
 
 // ─── Fire-and-forget background series generation ────────────────────────────
 async function runBackgroundGeneration(
-  apiKey: string,
   book: UserBook,
   tone: typeof PODCAST_TONES[0],
   onSeriesDone: (series: Omit<PodcastSeries, "id" | "bookId" | "createdAt">) => void
@@ -68,7 +67,7 @@ async function runBackgroundGeneration(
     generationStore.update(jobId, { status: "planning", label: "Architecting the series..." });
 
     // 2. Generate outline
-    const outline = await generateSeriesOutline(apiKey, book.title, book.author, text, tone.label);
+    const outline = await generateSeriesOutline(book.title, book.author, text, tone.label);
 
     // 3. Save with tone in title to allow multiple tones per book
     await saveAiArtifact(book.user_id, {
@@ -98,11 +97,9 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
   const [step, setStep] = useState<Step>(
     initialScript ? "playing"
       : initialSeries ? "selectEpisode"
-      : process.env.NEXT_PUBLIC_GROQ_API_KEY ? "selectTone"
-      : "apiKey"
+      : "selectTone"
   );
 
-  const [apiKey, setApiKey] = useState(process.env.NEXT_PUBLIC_GROQ_API_KEY || "");
   const [selectedTone, setSelectedTone] = useState(PODCAST_TONES[0]);
   const [series, setSeries] = useState<Omit<PodcastSeries, "id" | "bookId" | "createdAt"> | null>(initialSeries || null);
   const [selectedSeasonNumber, setSelectedSeasonNumber] = useState(1);
@@ -119,12 +116,6 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
 
   useEffect(() => {
     synthRef.current = typeof window !== "undefined" ? window.speechSynthesis : null;
-    const envKey = process.env.NEXT_PUBLIC_GROQ_API_KEY;
-    if (envKey) setApiKey(envKey);
-    else {
-      const saved = localStorage.getItem("GROQ_API_KEY") || localStorage.getItem("groq-api-key");
-      if (saved) setApiKey(saved);
-    }
     return () => synthRef.current?.cancel();
   }, []);
 
@@ -137,13 +128,12 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
   const removeFailed = (n: number) => setFailedEpisodes(prev => { const s = new Set(prev); s.delete(n); return s; });
 
   const handleSummonKeepers = () => {
-    if (!apiKey) return;
     if (series) {
       setStep("selectEpisode");
     } else {
       setStep("selectEpisode");
       runFullSeriesGeneration(
-        apiKey, book, selectedTone,
+        book, selectedTone,
         (outline) => setSeries(outline),
         (epNum) => { addReady(epNum); removeFailed(epNum); },
         (epNum) => addFailed(epNum)
@@ -154,7 +144,7 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
   const handleRetryFailed = () => {
     if (!series || failedEpisodes.size === 0) return;
     retryFailedEpisodes(
-      apiKey, book, series, failedEpisodes, selectedTone,
+      book, series, failedEpisodes, selectedTone,
       (epNum) => { addReady(epNum); removeFailed(epNum); },
       (epNum) => addFailed(epNum)
     );
@@ -205,7 +195,7 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
         seasons: series.seasons || [{ number: 1, title: "Archive Echoes", description: "", episodes: series.episodes || [] }],
       };
 
-      const result = await generateEpisodeScript(apiKey, normalizedSeries, episode, "");
+      const result = await generateEpisodeScript(normalizedSeries, episode, "");
       setScript(result);
       setStep("playing");
       // Also dispatch to global persistent player — survives closing the modal
@@ -327,38 +317,6 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
       <div className="flex-1">
         <AnimatePresence mode="wait">
 
-          {/* Step 0: API Key */}
-          {step === "apiKey" && (
-            <motion.div key="apiKey"
-              initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}
-              className="max-w-md mx-auto space-y-5"
-            >
-              <div className="text-center space-y-3">
-                <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center">
-                  <Key className="w-7 h-7 text-amber-500" />
-                </div>
-                <h2 className="text-2xl font-serif font-bold">Aether Credentials Required</h2>
-                <p className="text-sm text-muted-foreground font-serif italic">Provide your free Gemini API key.</p>
-              </div>
-              <Input
-                type="password"
-                placeholder="Enter Gemini API Key..."
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                className="h-12 rounded-2xl border-border/40 px-5 font-mono text-sm"
-              />
-              <Button
-                onClick={() => { localStorage.setItem("GROQ_API_KEY", apiKey); setStep("selectTone"); }}
-                disabled={!apiKey}
-                className="w-full h-11 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white"
-              >
-                Verify & Begin
-              </Button>
-              <p className="text-[10px] text-center text-muted-foreground uppercase tracking-widest font-bold">
-                Stored locally on your device only
-              </p>
-            </motion.div>
-          )}
 
           {/* Step 1: Tone Selection */}
           {step === "selectTone" && (
@@ -414,7 +372,6 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
                 </p>
                 <Button
                   onClick={handleSummonKeepers}
-                  disabled={!apiKey}
                   className="h-11 px-8 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white shadow-xl shadow-amber-500/20 gap-2 group"
                 >
                   <Headphones className="w-4 h-4" />

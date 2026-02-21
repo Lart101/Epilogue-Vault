@@ -11,7 +11,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { 
   Trash2, RotateCcw, ShieldAlert, Settings as SettingsIcon, 
-  History, Key, User, Book, Sparkles, Lock, Eye, EyeOff,
+  History, User, Book, Sparkles, Lock, Eye, EyeOff,
   Trash, CheckCircle2, ExternalLink, AlertCircle
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -27,8 +27,6 @@ export default function SettingsPage() {
   const { user } = useAuth();
   const [trashedBooks, setTrashedBooks] = useState<UserBook[]>([]);
   const [trashedArtifacts, setTrashedArtifacts] = useState<AiArtifact[]>([]);
-  const [apiKey, setApiKey] = useState("");
-  const [showApiKey, setShowApiKey] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   // Password change state
@@ -46,8 +44,6 @@ export default function SettingsPage() {
   useEffect(() => {
     if (user) {
       loadTrash();
-      const savedKey = localStorage.getItem("GROQ_API_KEY") || process.env.NEXT_PUBLIC_GROQ_API_KEY || "";
-      setApiKey(savedKey);
     }
   }, [user]);
 
@@ -102,11 +98,6 @@ export default function SettingsPage() {
       setPendingPurge(null);
     } catch { toast.error("Purging failed."); }
     finally { setIsPurging(false); }
-  };
-
-  const saveApiKey = () => {
-    localStorage.setItem("GROQ_API_KEY", apiKey);
-    toast.success("Aether credentials updated.");
   };
 
   const handleChangePassword = async () => {
@@ -170,7 +161,6 @@ export default function SettingsPage() {
         <TabsList className="bg-muted/20 p-1 rounded-2xl border border-border/30 h-auto flex-wrap gap-1">
           {[
             { value: "account", icon: User, label: "Profile" },
-            { value: "ai", icon: Key, label: "AI Config" },
             { value: "trash", icon: Trash, label: "Recovery" },
           ].map(tab => (
             <TabsTrigger key={tab.value} value={tab.value}
@@ -283,63 +273,6 @@ export default function SettingsPage() {
                 </Button>
               </div>
             )}
-          </Card>
-        </TabsContent>
-
-        {/* ── AI Config Tab ────────────────────────────────────────────────────── */}
-        <TabsContent value="ai" className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-          <Card className="p-8 bg-card/40 border-border/30 space-y-8 rounded-[2rem]">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-xl bg-primary/10 border border-primary/20">
-                    <Key className="w-4 h-4 text-primary" />
-                  </div>
-                  <h2 className="font-serif text-xl font-bold">Aether Credentials</h2>
-                </div>
-                <p className="text-sm text-muted-foreground font-serif italic ml-11">
-                  Your Gemini API key — powers the Archive Keepers' intelligence.
-                </p>
-              </div>
-              <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer"
-                className="flex items-center gap-1.5 text-xs text-primary hover:underline font-medium">
-                Get free key <ExternalLink className="w-3 h-3" />
-              </a>
-            </div>
-
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground ml-1">
-                  Gemini API Key
-                </label>
-                <div className="relative">
-                  <Input
-                    type={showApiKey ? "text" : "password"}
-                    placeholder="Enter your Gemini API key..."
-                    value={apiKey}
-                    onChange={e => setApiKey(e.target.value)}
-                    className="h-13 rounded-2xl border-border/40 px-5 pr-12 font-mono text-sm"
-                  />
-                  <button onClick={() => setShowApiKey(p => !p)}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors">
-                    {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
-              {apiKey && (
-                <div className="flex items-center gap-2 text-xs text-green-500">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span className="font-mono">Key configured — {apiKey.length} characters</span>
-                </div>
-              )}
-              <Button onClick={saveApiKey} disabled={!apiKey}
-                className="h-11 px-8 rounded-2xl gap-2">
-                Bind Credentials
-              </Button>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
-                Stored locally on your device only — never sent to our servers.
-              </p>
-            </div>
           </Card>
         </TabsContent>
 
