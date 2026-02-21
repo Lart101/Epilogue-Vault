@@ -32,9 +32,11 @@ export function SpotifyPlayer({
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const scriptContainerRef = useRef<HTMLDivElement>(null);
 
-  // Cleanup on unmount or script change
+  // Reset state on script change
   useEffect(() => {
+    setCurrentLineIndex(0);
     return () => {
       stopAndCleanup();
     };
@@ -161,6 +163,16 @@ export function SpotifyPlayer({
     }
   }, [isMuted, volume]);
 
+  // Auto-scroll the script view to the active line when expanded
+  useEffect(() => {
+    if (isExpanded && scriptContainerRef.current) {
+      const activeElement = scriptContainerRef.current.querySelector('[data-active="true"]');
+      if (activeElement) {
+        activeElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  }, [currentLineIndex, isExpanded]);
+
   const skipBack = () => {
     const prev = Math.max(0, currentLineIndex - 1);
     setCurrentLineIndex(prev);
@@ -180,11 +192,11 @@ export function SpotifyPlayer({
   return (
     <AnimatePresence>
       <motion.div
-        initial={{ y: 100, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        exit={{ y: 100, opacity: 0 }}
-        transition={{ type: "spring", stiffness: 300, damping: 30 }}
-        className="fixed bottom-0 left-0 right-0 z-[300]"
+        initial={{ y: 150, opacity: 0, scale: 0.95 }}
+        animate={{ y: 0, opacity: 1, scale: 1 }}
+        exit={{ y: 150, opacity: 0, scale: 0.95 }}
+        transition={{ type: "spring", stiffness: 400, damping: 30 }}
+        className="fixed bottom-4 left-4 right-4 md:bottom-8 md:left-1/2 md:right-auto md:-translate-x-1/2 md:w-full md:max-w-4xl z-[300]"
       >
         {/* Expanded Script View Backdrop Blur */}
         <AnimatePresence>
@@ -193,7 +205,7 @@ export function SpotifyPlayer({
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    className="fixed inset-0 bottom-[90px] bg-black/40 backdrop-blur-md z-[-1]"
+                    className="fixed inset-[-100vh] bg-black/60 backdrop-blur-md z-[-1]"
                     onClick={() => setIsExpanded(false)}
                 />
             )}
@@ -203,13 +215,14 @@ export function SpotifyPlayer({
         <AnimatePresence>
           {isExpanded && script && (
             <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "60vh", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className="bg-[#050505]/95 backdrop-blur-3xl border-t border-white/10 overflow-hidden shadow-[0_-20px_50px_rgba(0,0,0,0.5)] rounded-t-[2.5rem] mx-2 md:mx-auto max-w-5xl"
+              initial={{ height: 0, opacity: 0, y: 20 }}
+              animate={{ height: "65vh", opacity: 1, y: 0 }}
+              exit={{ height: 0, opacity: 0, y: 20 }}
+              transition={{ type: "spring", stiffness: 350, damping: 30 }}
+              className="bg-[#0a0a0a]/90 backdrop-blur-3xl border border-white/10 overflow-hidden shadow-[0_20px_60px_rgba(0,0,0,0.8)] rounded-3xl mb-4"
             >
-              <div className="h-full overflow-y-auto p-6 md:p-10 space-y-4 no-scrollbar relative">
-                <div className="absolute top-0 left-0 right-0 h-24 bg-gradient-to-b from-[#050505] to-transparent pointer-events-none z-10" />
+              <div ref={scriptContainerRef} className="h-full overflow-y-auto p-6 md:p-10 space-y-4 no-scrollbar relative scroll-smooth">
+                <div className="absolute top-0 left-0 right-0 h-24 bg-gradient-to-b from-[#0a0a0a]/90 to-transparent pointer-events-none z-10" />
                 
                 <p className="text-[10px] font-bold uppercase tracking-[0.4em] text-white/30 mb-10 text-center sticky top-4 z-20">
                   Script — Now Playing
@@ -217,6 +230,7 @@ export function SpotifyPlayer({
                 {script.dialogue.map((line, i) => (
                   <div
                     key={i}
+                    data-active={i === currentLineIndex}
                     className={cn(
                       "flex gap-5 p-5 rounded-3xl transition-all duration-500 cursor-pointer",
                       i === currentLineIndex 
@@ -255,10 +269,11 @@ export function SpotifyPlayer({
         </AnimatePresence>
 
         {/* Main Player Bar */}
-        <div className="bg-[#050505]/95 backdrop-blur-3xl border-t border-white/10 shadow-[0_-10px_40px_rgba(0,0,0,0.8)] pb-safe relative z-20">
+        <div className="bg-[#0a0a0a]/80 backdrop-blur-2xl border border-white/10 shadow-[0_20px_60px_rgba(0,0,0,0.8)] rounded-3xl overflow-hidden relative z-20">
           {/* Progress Bar */}
-          <div 
-            className="h-1 bg-white/5 cursor-pointer group/progress relative overflow-hidden"
+          <motion.div 
+            whileHover={{ scaleY: 2 }}
+            className="h-1.5 bg-white/10 cursor-pointer group/progress relative overflow-hidden transition-all mt-[-2px] origin-top z-30"
             onClick={(e) => {
               if (!script) return;
               const rect = e.currentTarget.getBoundingClientRect();
@@ -275,7 +290,7 @@ export function SpotifyPlayer({
             >
               <div className="absolute right-0 top-0 bottom-0 w-4 bg-white/50 blur-sm" />
             </motion.div>
-          </div>
+          </motion.div>
 
           <div className="flex items-center justify-between px-4 md:px-8 py-4 gap-4 max-w-7xl mx-auto">
             {/* Left: Track Info */}
@@ -284,10 +299,38 @@ export function SpotifyPlayer({
                 <div className="w-14 h-14 md:w-16 md:h-16 rounded-xl overflow-hidden shadow-2xl flex-shrink-0 border border-white/10 relative group-hover:scale-105 transition-transform">
                   <img src={book.coverUrl} className="w-full h-full object-cover" alt="" />
                   <div className="absolute inset-0 bg-black/20" />
+                  
+                  {/* Audio Visualizer Overlay */}
+                  <AnimatePresence>
+                    {isPlaying && !isLoadingAudio && (
+                      <motion.div 
+                        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center gap-1"
+                      >
+                        <motion.div animate={{ height: ["8px", "16px", "8px"] }} transition={{ repeat: Infinity, duration: 0.6 }} className="w-1 bg-white rounded-full" />
+                        <motion.div animate={{ height: ["12px", "24px", "12px"] }} transition={{ repeat: Infinity, duration: 0.6, delay: 0.2 }} className="w-1 bg-white rounded-full" />
+                        <motion.div animate={{ height: ["8px", "16px", "8px"] }} transition={{ repeat: Infinity, duration: 0.6, delay: 0.4 }} className="w-1 bg-white rounded-full" />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
               ) : (
-                <div className="w-14 h-14 md:w-16 md:h-16 rounded-xl bg-amber-500/5 border border-amber-500/20 flex items-center justify-center flex-shrink-0 shadow-[inset_0_0_20px_rgba(245,158,11,0.1)]">
+                <div className="w-14 h-14 md:w-16 md:h-16 rounded-xl bg-amber-500/5 border border-amber-500/20 relative flex items-center justify-center flex-shrink-0 shadow-[inset_0_0_20px_rgba(245,158,11,0.1)] overflow-hidden">
                   <Radio className="w-6 h-6 text-amber-500/70" />
+                  
+                  {/* Audio Visualizer Overlay Fallback */}
+                  <AnimatePresence>
+                    {isPlaying && !isLoadingAudio && (
+                      <motion.div 
+                        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        className="absolute inset-0 bg-[#0a0a0a]/80 backdrop-blur-[2px] flex items-center justify-center gap-1"
+                      >
+                        <motion.div animate={{ height: ["8px", "16px", "8px"] }} transition={{ repeat: Infinity, duration: 0.6 }} className="w-1 bg-amber-400 rounded-full" />
+                        <motion.div animate={{ height: ["12px", "24px", "12px"] }} transition={{ repeat: Infinity, duration: 0.6, delay: 0.2 }} className="w-1 bg-amber-400 rounded-full" />
+                        <motion.div animate={{ height: ["8px", "16px", "8px"] }} transition={{ repeat: Infinity, duration: 0.6, delay: 0.4 }} className="w-1 bg-amber-400 rounded-full" />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
               )}
               
@@ -315,22 +358,24 @@ export function SpotifyPlayer({
             {/* Center: Controls */}
             <div className="flex flex-col items-center gap-2">
               <div className="flex items-center gap-4 md:gap-6">
-                <Button
-                  variant="ghost"
-                  size="icon"
+                <motion.button
+                  whileHover={{ scale: 1.1 }}
+                  whileTap={{ scale: 0.9 }}
                   onClick={skipBack}
                   disabled={isGenerating || !script}
-                  className="h-10 w-10 rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-all disabled:opacity-20"
+                  className="h-10 w-10 flex items-center justify-center rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-20 disabled:hover:scale-100"
                 >
                   <SkipBack className="w-4 h-4 md:w-5 md:h-5 fill-current" />
-                </Button>
+                </motion.button>
 
-                <Button
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   onClick={togglePlay}
                   disabled={isGenerating || !script}
                   className={cn(
-                    "h-14 w-14 md:h-16 md:w-16 rounded-full text-black transition-all disabled:opacity-40",
-                     isLoadingAudio ? "bg-white/50" : isPlaying ? "bg-white shadow-[0_0_30px_rgba(255,255,255,0.3)] hover:scale-105" : "bg-white hover:scale-105 hover:shadow-[0_0_40px_rgba(255,255,255,0.4)]"
+                    "h-14 w-14 md:h-16 md:w-16 flex items-center justify-center rounded-full text-black transition-colors disabled:opacity-40 disabled:hover:scale-100",
+                     isLoadingAudio ? "bg-white/50" : isPlaying ? "bg-white shadow-[0_0_30px_rgba(255,255,255,0.3)]" : "bg-white shadow-[0_0_40px_rgba(255,255,255,0.4)]"
                   )}
                 >
                   {isGenerating ? (
@@ -342,17 +387,17 @@ export function SpotifyPlayer({
                   ) : (
                     <Play className="w-6 h-6 md:w-7 md:h-7 fill-current ml-1" />
                   )}
-                </Button>
+                </motion.button>
 
-                <Button
-                  variant="ghost"
-                  size="icon"
+                <motion.button
+                  whileHover={{ scale: 1.1 }}
+                  whileTap={{ scale: 0.9 }}
                   onClick={skipForward}
                   disabled={isGenerating || !script}
-                  className="h-10 w-10 rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-all disabled:opacity-20"
+                  className="h-10 w-10 flex items-center justify-center rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-20 disabled:hover:scale-100"
                 >
                   <SkipForward className="w-4 h-4 md:w-5 md:h-5 fill-current" />
-                </Button>
+                </motion.button>
               </div>
             </div>
 
@@ -362,38 +407,38 @@ export function SpotifyPlayer({
                 {script ? `${currentLineIndex + 1} / ${script.dialogue.length}` : ''}
               </span>
 
-              <Button
-                variant="ghost"
-                size="icon"
+              <motion.button
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.9 }}
                 onClick={() => setIsExpanded(!isExpanded)}
                 className={cn(
-                  "h-10 w-10 rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-all relative",
+                  "h-10 w-10 flex items-center justify-center rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-colors relative",
                   isExpanded && "text-amber-400 bg-amber-500/10 hover:bg-amber-500/20"
                 )}
                 title="Toggle Script"
               >
-                <ChevronDown className={cn("w-5 h-5 transition-transform", isExpanded && "rotate-180")} />
-              </Button>
+                <ChevronDown className={cn("w-5 h-5 transition-transform duration-500", isExpanded && "rotate-180")} />
+              </motion.button>
 
-              <Button
-                variant="ghost"
-                size="icon"
+              <motion.button
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.9 }}
                 onClick={() => { setIsMuted(!isMuted); }}
-                className="h-10 w-10 rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-all hidden sm:flex"
+                className="h-10 w-10 flex items-center justify-center rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-colors hidden sm:flex"
               >
                 {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
-              </Button>
+              </motion.button>
 
               <div className="h-6 w-px bg-white/10 mx-1 hidden sm:block" />
 
-              <Button
-                variant="ghost"
-                size="icon"
+              <motion.button
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.9 }}
                 onClick={onClose}
-                className="h-10 w-10 rounded-full text-white/30 hover:text-red-400 hover:bg-red-500/10 transition-all"
+                className="h-10 w-10 flex items-center justify-center rounded-full text-white/30 hover:text-red-400 hover:bg-red-500/10 transition-colors"
               >
                 <X className="w-5 h-5" />
-              </Button>
+              </motion.button>
             </div>
           </div>
         </div>
