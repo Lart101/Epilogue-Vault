@@ -264,3 +264,8 @@
 .tracking-ultra-wide {
   letter-spacing: 0.25em;
 }
+
+.mask-fade-edges {
+  mask-image: linear-gradient(to bottom, transparent, black 15%, black 85%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 15%, black 85%, transparent);
+}

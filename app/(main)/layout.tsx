@@ -4,7 +4,7 @@ import { useAuth } from "@/components/providers/auth-provider";
 import { useRouter, usePathname } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { BookOpen, Compass, Library, LogOut, Loader2 } from "lucide-react";
+import { BookOpen, Compass, Library, LogOut, Loader2, Sparkles, Settings } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -16,10 +16,15 @@ import {
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { BackgroundGenerationPill } from "@/components/ai/background-generation-pill";
+import { NotificationBell } from "@/components/ui/notification-bell";
+import { PersistentPlayer } from "@/components/ai/persistent-player";
 
 const navItems = [
   { href: "/library", label: "Library", icon: Library },
   { href: "/discover", label: "Archives", icon: Compass },
+  { href: "/ai-lab", label: "Resonance Lab", icon: Sparkles },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export default function MainLayout({ children }: { children: ReactNode }) {
@@ -45,6 +50,8 @@ export default function MainLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-screen bg-background selection:bg-primary/20 selection:text-primary-foreground">
+      <BackgroundGenerationPill />
+      <PersistentPlayer />
       {/* Navigation: Floating Sanctuary Bar */}
       <div className="fixed top-6 left-0 right-0 z-[100] flex justify-center px-6 pointer-events-none">
         <header className="pointer-events-auto flex items-center justify-between gap-8 h-14 px-6 rounded-2xl glass border-border/40 shadow-2xl shadow-black/5 max-w-2xl w-full translate-z-0">
@@ -88,8 +95,9 @@ export default function MainLayout({ children }: { children: ReactNode }) {
             })}
           </nav>
 
-          {/* Right Section: Theme & User Menu */}
-          <div className="shrink-0 flex items-center gap-3">
+          {/* Right Section: Notifications, Theme & User Menu */}
+          <div className="shrink-0 flex items-center gap-2">
+            <NotificationBell />
             <ThemeToggle />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

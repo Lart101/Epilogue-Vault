@@ -26,6 +26,7 @@ export interface UserBook {
     readingProgress: ReadingProgress; // Mapped from reading_progress
     addedAt: string; // ISO, mapped from added_at
     lastReadAt: string | null; // ISO, mapped from last_read_at
+    deletedAt?: string | null;
 }
 
 export interface Collection {
@@ -51,6 +52,17 @@ export interface StoreBook {
     addedAt: string; // mapped from added_at
 }
 
+export interface AiArtifact {
+    id: string;
+    user_id: string;
+    book_id: string | null;
+    type: string;
+    title: string;
+    content: any;
+    createdAt: string;
+    deletedAt?: string | null;
+}
+
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
 function mapUserBook(row: any): UserBook {
@@ -68,6 +80,7 @@ function mapUserBook(row: any): UserBook {
         readingProgress: row.reading_progress || { cfi: "", percentage: 0, currentPage: 0, lastReadAt: null },
         addedAt: row.added_at,
         lastReadAt: row.last_read_at,
+        deletedAt: row.deleted_at,
     };
 }
 
@@ -97,6 +110,19 @@ function mapStoreBook(row: any): StoreBook {
     };
 }
 
+function mapAiArtifact(row: any): AiArtifact {
+    return {
+        id: row.id,
+        user_id: row.user_id,
+        book_id: row.book_id,
+        type: row.type,
+        title: row.title,
+        content: row.content,
+        createdAt: row.created_at,
+        deletedAt: row.deleted_at,
+    };
+}
+
 // ─── User Library — CRUD ───────────────────────────────────────────────────
 
 export async function getUserBooks(uid: string): Promise<UserBook[]> {
@@ -104,6 +130,7 @@ export async function getUserBooks(uid: string): Promise<UserBook[]> {
         .from("user_books")
         .select("*")
         .eq("user_id", uid)
+        .is("deleted_at", null)
         .order("last_read_at", { ascending: false, nullsFirst: false })
         .order("added_at", { ascending: false });
 
@@ -172,7 +199,7 @@ export async function updateBook(
 }
 
 export async function deleteBook(uid: string, bookId: string): Promise<void> {
-    const { error } = await supabase.from("user_books").delete().eq("id", bookId);
+    const { error } = await supabase.from("user_books").delete().eq("id", bookId).eq("user_id", uid);
     if (error) throw error;
 
     // Cleanup collections
@@ -343,4 +370,114 @@ export async function addStoreBookToLibrary(
         source: "store",
         storeBookId: storeBook.id,
     });
+}
+
+// ─── AI Artifacts ───────────────────────────────────────────────────────────
+
+export async function saveAiArtifact(
+    uid: string,
+    artifact: Omit<AiArtifact, "id" | "user_id" | "createdAt">
+): Promise<string> {
+    const { data, error } = await supabase
+        .from("ai_artifacts")
+        .insert({
+            user_id: uid,
+            book_id: artifact.book_id,
+            type: artifact.type,
+            title: artifact.title,
+            content: artifact.content,
+        })
+        .select("id")
+        .single();
+
+    if (error) throw error;
+    return data.id;
+}
+
+export async function getUserAiArtifacts(uid: string, type?: string): Promise<AiArtifact[]> {
+    let query = supabase.from("ai_artifacts").select("*").eq("user_id", uid).is("deleted_at", null);
+
+    if (type) {
+        query = query.eq("type", type);
+    }
+
+    const { data, error } = await query.order("created_at", { ascending: false });
+
+    if (error) {
+        console.error("Error fetching AI artifacts:", error);
+        return [];
+    }
+    return (data || []).map(mapAiArtifact);
+}
+
+export async function deleteAiArtifact(uid: string, artifactId: string): Promise<void> {
+    const { error } = await supabase
+        .from("ai_artifacts")
+        .delete()
+        .eq("id", artifactId)
+        .eq("user_id", uid);
+
+    if (error) throw error;
+}
+
+// ─── Trash & Recovery ──────────────────────────────────────────────────────
+
+export async function trashBook(uid: string, bookId: string): Promise<void> {
+    const { error } = await supabase
+        .from("user_books")
+        .update({ deleted_at: new Date().toISOString() })
+        .eq("id", bookId)
+        .eq("user_id", uid);
+    if (error) throw error;
+}
+
+export async function restoreBook(uid: string, bookId: string): Promise<void> {
+    const { error } = await supabase
+        .from("user_books")
+        .update({ deleted_at: null })
+        .eq("id", bookId)
+        .eq("user_id", uid);
+    if (error) throw error;
+}
+
+export async function trashAiArtifact(uid: string, artifactId: string): Promise<void> {
+    const { error } = await supabase
+        .from("ai_artifacts")
+        .update({ deleted_at: new Date().toISOString() })
+        .eq("id", artifactId)
+        .eq("user_id", uid);
+    if (error) throw error;
+}
+
+export async function restoreAiArtifact(uid: string, artifactId: string): Promise<void> {
+    const { error } = await supabase
+        .from("ai_artifacts")
+        .update({ deleted_at: null })
+        .eq("id", artifactId)
+        .eq("user_id", uid);
+    if (error) throw error;
+}
+
+export async function getTrashedBooks(uid: string): Promise<UserBook[]> {
+    const { data, error } = await supabase
+        .from("user_books")
+        .select("*")
+        .eq("user_id", uid)
+        .not("deleted_at", "is", null)
+        .order("deleted_at", { ascending: false });
+
+    if (error) return [];
+    return (data || []).map(mapUserBook);
+}
+
+export async function getTrashedAiArtifacts(uid: string): Promise<AiArtifact[]> {
+    const { data, error } = await supabase
+        .from("ai_artifacts")
+        .select("*")
+        .eq("user_id", uid)
+        .not("deleted_at", "is", null)
+        .order("deleted_at", { ascending: false });
+
+    if (error) return [];
+    return (data || []).map(mapAiArtifact);
 }
