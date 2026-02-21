@@ -9,7 +9,6 @@ import { ReaderFooter } from "./reader-footer";
 import { ReaderSidebar } from "./reader-sidebar";
 import { EpubReader } from "./epub-reader";
 import { UltraPdfReader } from "./ultra-pdf-reader";
-import { ReaderQuickNav } from "./reader-quick-nav";
 import { useReadingSync } from "@/hooks/use-reading-sync";
 import type { UserBook } from "@/lib/db";
 import { Loader2 } from "lucide-react";
@@ -91,11 +90,6 @@ function ReaderUI({ book, bookId }: BookReaderProps) {
               initialLocation={book.readingProgress?.cfi} 
             />
           )}
-        </div>
-
-        {/* The Silk Ribbon (Floating Navigation Metaphor) */}
-        <div className="absolute bottom-10 left-0 right-0 z-40 pointer-events-none">
-          <ReaderQuickNav />
         </div>
       </div>
     </ReaderLayout>

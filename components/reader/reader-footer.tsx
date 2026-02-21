@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 
 export function ReaderFooter() {
-  const { showControls, meta, navigate, location } = useReader();
+  const { showControls, meta, navigate, location, triggerAction } = useReader();
   const [sliderValue, setSliderValue] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -59,46 +59,66 @@ export function ReaderFooter() {
               </div>
 
               {/* Cinematic Scrubber Track */}
-              <div className="relative h-10 flex items-center group px-2">
-                   {/* Background Track */}
-                    <div className="absolute left-2 right-2 h-[4px] bg-white/10 rounded-full overflow-hidden transition-all duration-300 group-hover:h-[6px]">
-                        {/* Fill Track */}
-                        <div 
-                            className="h-full bg-vault-brass transition-all duration-150 ease-out"
-                            style={{ width: `${sliderValue}%` }}
+              <div className="relative h-10 flex items-center gap-4 group px-2">
+                   <Button 
+                     variant="ghost" 
+                     size="icon"
+                     onClick={() => triggerAction("prev")}
+                     className="h-8 w-8 text-vault-sand/40 hover:text-vault-brass transition-colors pointer-events-auto"
+                   >
+                     <ChevronLeft className="w-5 h-5" />
+                   </Button>
+
+                   <div className="relative flex-1 h-10 flex items-center group">
+                        {/* Background Track */}
+                         <div className="absolute left-0 right-0 h-[4px] bg-white/10 rounded-full overflow-hidden transition-all duration-300 group-hover:h-[6px]">
+                             {/* Fill Track */}
+                             <div 
+                                 className="h-full bg-vault-brass transition-all duration-150 ease-out"
+                                 style={{ width: `${sliderValue}%` }}
+                             />
+                         </div>
+                        
+                        {/* Input Element (Invisible overlay for interaction) */}
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          value={sliderValue || 0}
+                          onChange={(e) => {
+                             setIsDragging(true);
+                             setSliderValue(parseFloat(e.target.value));
+                          }}
+                          onMouseUp={(e) => {
+                             setIsDragging(false);
+                             navigate("percentage", parseFloat(e.currentTarget.value) / 100);
+                          }}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
                         />
-                    </div>
-                   
-                   {/* Input Element (Invisible overlay for interaction) */}
-                   <input
-                     type="range"
-                     min="0"
-                     max="100"
-                     step="0.01"
-                     value={sliderValue || 0}
-                     onChange={(e) => {
-                        setIsDragging(true);
-                        setSliderValue(parseFloat(e.target.value));
-                     }}
-                     onMouseUp={(e) => {
-                        setIsDragging(false);
-                        navigate("percentage", parseFloat(e.currentTarget.value) / 100);
-                     }}
-                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
-                   />
-                   
-                    {/* Floating Glow Thumb */}
-                    <motion.div 
-                         animate={{ 
-                           left: `calc(8px + (100% - 16px) * ${sliderValue / 100})`, 
-                           scale: isDragging ? 1.4 : 1,
-                         }}
-                         transition={{ type: "spring", stiffness: 400, damping: 25 }}
-                         className={cn(
-                             "absolute h-3 w-3 bg-vault-brass rounded-full shadow-[0_0_15px_rgba(197,160,89,0.8)] pointer-events-none -translate-x-1/2 z-10 transition-colors",
-                             isDragging ? "bg-white" : ""
-                         )}
-                    />
+                        
+                         {/* Floating Glow Thumb */}
+                         <motion.div 
+                              animate={{ 
+                                left: `calc(${sliderValue}%)`, 
+                                scale: isDragging ? 1.4 : 1,
+                              }}
+                              transition={{ type: "spring", stiffness: 400, damping: 25 }}
+                              className={cn(
+                                  "absolute h-3 w-3 bg-vault-brass rounded-full shadow-[0_0_15px_rgba(197,160,89,0.8)] pointer-events-none -translate-x-1/2 z-10 transition-colors",
+                                  isDragging ? "bg-white" : ""
+                              )}
+                         />
+                   </div>
+
+                   <Button 
+                     variant="ghost" 
+                     size="icon"
+                     onClick={() => triggerAction("next")}
+                     className="h-8 w-8 text-vault-sand/40 hover:text-vault-brass transition-colors pointer-events-auto"
+                   >
+                     <ChevronRight className="w-5 h-5" />
+                   </Button>
               </div>
 
           </motion.footer>
