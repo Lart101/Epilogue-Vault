@@ -1,35 +1,91 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Play, Sparkles, Layers, Clock, BookOpen, 
-  ChevronRight, Mic2, Info, Star, Calendar, Hash
-} from "lucide-react";
+import { X, Play, Sparkles, Layers, Calendar, Mic2, BookOpen, Wand2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { AiArtifact, UserBook } from "@/lib/db";
-import { Episode, Season } from "@/lib/gemini";
+import { AiArtifact, UserBook, getUserAiArtifacts } from "@/lib/db";
+import { Episode, Season, PODCAST_TONES } from "@/lib/gemini";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
+import { generationStore } from "@/lib/generation-store";
 
 
 interface ResonanceDetailProps {
+  userId: string | null;
   artifact: AiArtifact;
   book: UserBook | null;
   onClose: () => void;
-  onPlayEpisode: (episode: Episode, season: Season) => void;
+  onPlayEpisode: (episode: Episode, season: Season, actualArtifact?: AiArtifact) => void;
+  onGenerateTone: (toneId: string) => void;
 }
 
 export function ResonanceDetail({ 
-  artifact, book, onClose, onPlayEpisode 
+  userId, artifact, book, onClose, onPlayEpisode, onGenerateTone 
 }: ResonanceDetailProps) {
-  const isSeries = artifact.type === "podcast-series";
-  const content = artifact.content as any;
+  const [allSeries, setAllSeries] = useState<AiArtifact[]>([artifact]);
+  const initialTone = (artifact.content as any)._toneId || 
+    PODCAST_TONES.find(t => t.label === (artifact.content as any).tone)?.id || 
+    "philosophical";
+
+  const [selectedToneId, setSelectedToneId] = useState(initialTone);
+  const [selectedSeason, setSelectedSeason] = useState(1);
+  // Initialised synchronously from the store so the first render is correct
+  // (avoids the Generate → Loading flicker on modal reopen)
+  const [isGenerating, setIsGenerating] = useState(() => {
+    const bookTitle = book?.title;
+    if (!bookTitle) return false;
+    return generationStore.getAll().some(
+      j => j.bookTitle === bookTitle && j.status !== "done" && j.status !== "error"
+    );
+  });
+
+  const loadAllSeries = () => {
+    if (userId && book?.id) {
+      getUserAiArtifacts(userId, "podcast-series")
+        .then(res => setAllSeries(res.filter(a => a.book_id === book.id)));
+    }
+  };
+
+  useEffect(() => {
+    loadAllSeries();
+  }, [userId, book?.id]);
+
+  // Subscribe to generationStore to know if a tone for THIS book is in progress
+  useEffect(() => {
+    const unsub = generationStore.subscribe(jobs => {
+      const bookTitle = book?.title;
+      if (!bookTitle) return;
+
+      const prevGenerating = isGenerating;
+      const activeJobForBook = jobs.find(
+        j => j.bookTitle === bookTitle && j.status !== "done" && j.status !== "error"
+      );
+      const nowGenerating = !!activeJobForBook;
+      setIsGenerating(nowGenerating);
+
+      // When a job finishes, refresh allSeries to pick up the new tone immediately
+      if (prevGenerating && !nowGenerating) {
+        loadAllSeries();
+      }
+    });
+    return () => { unsub(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [book?.title]);
+
+  const activeArtifact = allSeries.find(a => 
+    (a.content as any)._toneId === selectedToneId || 
+    ((a.content as any).tone && PODCAST_TONES.find(t => t.label === (a.content as any).tone)?.id === selectedToneId)
+  );
+
+  const isSeries = activeArtifact?.type === "podcast-series";
+  const content = activeArtifact?.content as any;
   
   const seasons: Season[] = content?.seasons || 
     (content?.episodes ? [{ number: 1, title: "Archive Echoes", description: "", episodes: content.episodes }] : []);
   
-  const [selectedSeason, setSelectedSeason] = useState(seasons[0]?.number || 1);
   const activeSeason = seasons.find(s => s.number === selectedSeason) || seasons[0];
+  const missingToneMeta = PODCAST_TONES.find(t => t.id === selectedToneId);
 
   return (
     <motion.div
@@ -110,9 +166,9 @@ export function ResonanceDetail({
                   )}
                   <span className="px-3 py-1 rounded-full bg-white/10 border border-white/20 text-white/70 text-[10px] font-bold uppercase tracking-widest flex items-center gap-1">
                     <Calendar className="w-3 h-3" />
-                    {format(new Date(artifact.createdAt), "MMM yyyy")}
+                    {format(new Date(activeArtifact?.createdAt || artifact.createdAt), "MMM yyyy")}
                   </span>
-                  {content?.tone && (
+                  {activeArtifact && content?.tone && (
                     <span className="px-3 py-1 rounded-full bg-white/10 border border-white/20 text-white/70 text-[10px] font-bold uppercase tracking-widest flex items-center gap-1">
                       <Mic2 className="w-3 h-3" />
                       {content.tone}
@@ -127,8 +183,81 @@ export function ResonanceDetail({
         {/* Content Area */}
         <div className="bg-[#111] min-h-[45vh] p-8 sm:p-10 space-y-10 rounded-t-none">
           
-          {/* Overview */}
-          {isSeries ? (
+          {/* Tone Selector */}
+          {book && (
+            <div className="space-y-4 border-b border-white/10 pb-8">
+              <h2 className="text-xs font-bold uppercase tracking-[0.2em] text-white/40">Resonance Tone</h2>
+              <div className="flex flex-wrap gap-2">
+                {PODCAST_TONES.map(tone => {
+                  const exists = allSeries.some(a => 
+                    (a.content as any)._toneId === tone.id || 
+                    ((a.content as any).tone && PODCAST_TONES.find(t => t.label === (a.content as any).tone)?.id === tone.id)
+                  );
+                  return (
+                    <button
+                      key={tone.id}
+                      onClick={() => { setSelectedToneId(tone.id); setSelectedSeason(1); }}
+                      className={cn(
+                        "px-4 py-2 rounded-full text-xs font-bold font-serif transition-colors border",
+                        selectedToneId === tone.id 
+                          ? "bg-primary text-primary-foreground border-primary" 
+                          : "bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10",
+                        !exists && selectedToneId !== tone.id && "opacity-50 hover:opacity-100"
+                      )}
+                    >
+                      {tone.label} {exists && "✨"}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Dynamic State: Generated vs Not Generated */}
+          {!activeArtifact ? (
+            <div className="py-20 flex flex-col items-center justify-center text-center space-y-6">
+              <div className="w-16 h-16 rounded-full bg-white/5 border border-white/10 flex items-center justify-center mb-2">
+                <Wand2 className="w-8 h-8 text-white/30" />
+              </div>
+              <div className="space-y-2 max-w-md">
+                <h3 className="text-2xl font-serif font-bold text-white">Unlock the {missingToneMeta?.label} Echo</h3>
+                <p className="text-white/50 text-sm leading-relaxed">
+                  This tone hasn't been generated for {book?.title}. {missingToneMeta?.description}
+                </p>
+              </div>
+              
+              {(() => {
+                  const hasLocalSeriesForTone = allSeries.some(a => 
+                    (a.content as any)._toneId === selectedToneId || 
+                    ((a.content as any).tone && PODCAST_TONES.find(t => t.label === (a.content as any).tone)?.id === selectedToneId)
+                  );
+                  if (hasLocalSeriesForTone) {
+                      return (
+                          <div className="px-6 py-4 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-500/90 text-sm font-bold tracking-wider uppercase">
+                              <Sparkles className="w-4 h-4 inline-block mr-2" />
+                              Already Synthesized
+                          </div>
+                      );
+                  }
+                  return (
+                      <Button 
+                        onClick={() => {
+                          setIsGenerating(true);
+                          onGenerateTone(selectedToneId);
+                        }}
+                        disabled={isGenerating}
+                        className="bg-amber-500 hover:bg-amber-600 text-black font-bold h-12 shadow-lg shadow-amber-500/20 px-8 rounded-full"
+                      >
+                        {isGenerating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                        {isGenerating ? "Synthesizing Echoes..." : `Generate ${missingToneMeta?.label} Chronicles`}
+                      </Button>
+                  );
+              })()}
+            </div>
+          ) : (
+            <>
+              {/* Overview */}
+              {isSeries ? (
             <div className="space-y-6">
               <div className="space-y-3">
                 <h2 className="text-xs font-bold uppercase tracking-[0.2em] text-white/40">Overview</h2>
@@ -200,7 +329,7 @@ export function ResonanceDetail({
                     episode={episode}
                     season={activeSeason}
                     index={idx}
-                    onPlay={onPlayEpisode}
+                    onPlay={(ep, sea) => onPlayEpisode(ep, sea, activeArtifact)}
                   />
                 ))}
               </div>
@@ -222,6 +351,8 @@ export function ResonanceDetail({
               </div>
             )}
           </div>
+          </>
+          )}
 
           {/* Bottom padding for Spotify player */}
           <div className="h-24" />

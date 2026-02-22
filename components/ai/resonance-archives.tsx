@@ -52,8 +52,14 @@ export function ResonanceArchives({ userId, onReplay, onOpenDetail }: ResonanceA
     return !isChild;
   });
 
+  // Deduplicate series so we only show one card per book, even with multiple tones
+  const podcastSeries = artifacts.filter(a => a.type === "podcast-series");
+  const uniqueSeriesByBook = Array.from(
+    new Map(podcastSeries.map(a => [a.book_id, a])).values()
+  );
+
   const unified = [
-    ...artifacts.filter(a => a.type === "podcast-series"),
+    ...uniqueSeriesByBook,
     ...standaloneEpisodes,
   ];
 
@@ -105,8 +111,14 @@ export function ResonanceArchives({ userId, onReplay, onOpenDetail }: ResonanceA
     setIsDeleting(true);
     try {
       if (pendingTrash.type === "podcast-series") {
-        // Find all child episodes of this series
-        const childEpisodes = artifacts.filter(a => a.type === "podcast" && a.book_id === pendingTrash.book_id);
+        const toneLabel = (pendingTrash.content as any).tone;
+        
+        // Find all child episodes of THIS specific series (by book_id and tone label)
+        const childEpisodes = artifacts.filter(a => 
+          a.type === "podcast" && 
+          a.book_id === pendingTrash.book_id &&
+          (!toneLabel || a.title.includes(`(${toneLabel})`))
+        );
         
         // Trash the series and all its episodes
         await Promise.all([
@@ -221,17 +233,25 @@ function ArchiveRow({ artifacts, activeJobs = [], getBook, onCardClick, onTrashC
       <div ref={scrollRef} className="flex gap-5 overflow-x-auto pb-4 no-scrollbar"
         style={{ scrollbarWidth: "none" }}>
         
-        {/* ── Active Generation Jobs ── */}
-        {activeJobs.map((job, i) => (
+        {/* ── Active Generation Jobs (Standalone Only) ── */}
+        {activeJobs.map((job, i) => {
+            // Find if there's already a unified card for this job's book
+            const hasUnifiedCard = artifacts.some(a => {
+              const book = getBook(a.book_id);
+              return book?.title === job.bookTitle;
+            });
+            if (hasUnifiedCard) return null; // We overlay it on the completed card instead
+            
+            return (
             <motion.div
               key={job.id}
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
-              className="flex-shrink-0 w-[220px]"
+              className="flex-shrink-0 w-[240px]"
             >
-              <div className="group/card relative rounded-2xl overflow-hidden bg-card border border-amber-500/40 shadow-[0_0_20px_rgba(245,158,11,0.15)] pointer-events-none">
+              <div className="group/card relative h-[400px] flex flex-col rounded-[1.25rem] overflow-hidden bg-card border border-amber-500/40 shadow-[0_0_20px_rgba(245,158,11,0.15)] pointer-events-none">
                  {/* Cover Art */}
-                 <div className="relative aspect-[3/4] overflow-hidden">
+                 <div className="relative aspect-[3/4] flex-shrink-0 overflow-hidden">
                     {job.bookCover ? (
                       <img src={job.bookCover} className="absolute inset-0 w-full h-full object-cover blur-sm brightness-50" alt="" />
                     ) : (
@@ -265,19 +285,19 @@ function ArchiveRow({ artifacts, activeJobs = [], getBook, onCardClick, onTrashC
                  </div>
                  
                  {/* Info Footer */}
-                 <div className="p-3.5 space-y-2 opacity-60 bg-gradient-to-b from-transparent to-black/40">
+                 <div className="p-4 flex-1 flex flex-col justify-center opacity-60 bg-gradient-to-b from-transparent to-black/40">
                     <div>
-                       <p className="font-serif font-bold text-[13px] leading-tight line-clamp-2 text-white">
+                       <p className="font-serif font-bold text-sm leading-tight line-clamp-2 text-white">
                          {job.bookTitle}
                        </p>
-                       <p className="text-[10px] text-amber-500/80 uppercase tracking-widest mt-0.5 truncate font-mono">
+                       <p className="text-[10px] text-amber-500/80 uppercase tracking-widest mt-1 truncate font-mono">
                          {job.tone} Series
                        </p>
                     </div>
                  </div>
               </div>
             </motion.div>
-        ))}
+        )})}
 
         {/* ── Completed Artifacts ── */}
         {artifacts.map((artifact, i) => {
@@ -289,11 +309,11 @@ function ArchiveRow({ artifacts, activeJobs = [], getBook, onCardClick, onTrashC
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.06, type: "spring", stiffness: 200, damping: 20 }}
-              className="flex-shrink-0 w-[220px]"
+              className="flex-shrink-0 w-[240px]"
             >
-              <div className="group/card relative rounded-2xl overflow-hidden bg-card border border-border/30 shadow-lg hover:shadow-xl hover:border-primary/20 hover:-translate-y-1 transition-all duration-400">
+              <div className="group/card relative h-[400px] flex flex-col rounded-[1.25rem] overflow-hidden bg-card border border-border/30 shadow-lg hover:shadow-xl hover:border-primary/20 hover:-translate-y-1 transition-all duration-400">
                 {/* ── Cover Art ── */}
-                <div className="relative aspect-[3/4] cursor-pointer overflow-hidden" onClick={() => onCardClick(artifact)}>
+                <div className="relative aspect-[3/4] flex-shrink-0 cursor-pointer overflow-hidden" onClick={() => onCardClick(artifact)}>
                   {book?.coverUrl ? (
                     <img
                       src={book.coverUrl}
@@ -343,18 +363,18 @@ function ArchiveRow({ artifacts, activeJobs = [], getBook, onCardClick, onTrashC
                 </div>
 
                 {/* ── Info Footer ── */}
-                <div className="p-3.5 space-y-2 cursor-pointer" onClick={() => onCardClick(artifact)}>
+                <div className="p-4 flex-1 flex flex-col justify-between cursor-pointer bg-card" onClick={() => onCardClick(artifact)}>
                   <div>
-                    <p className="font-serif font-bold text-[13px] leading-tight line-clamp-2">
+                    <p className="font-serif font-bold text-sm leading-tight line-clamp-2">
                       {book?.title || artifact.title.replace("Series: ", "")}
                     </p>
                     {book && (
-                      <p className="text-[10px] text-muted-foreground/60 uppercase tracking-widest mt-0.5 truncate font-mono">
-                        {artifact.title.replace("Series: ", "")}
+                      <p className="text-[10px] text-muted-foreground/60 uppercase tracking-widest mt-1 truncate font-mono">
+                        {isSeries ? "RESONANCE ARCHIVES" : artifact.title.replace("Series: ", "")}
                       </p>
                     )}
                   </div>
-                  <div className="flex items-center gap-3 text-[10px] text-muted-foreground/50 font-medium uppercase tracking-widest">
+                  <div className="flex items-center gap-3 text-[10px] text-muted-foreground/50 font-medium uppercase tracking-widest mt-2">
                     <span className="flex items-center gap-1">
                       <Calendar className="w-3 h-3" />
                       {format(new Date(artifact.createdAt), "MMM d")}

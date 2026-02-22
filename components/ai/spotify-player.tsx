@@ -120,9 +120,19 @@ export function SpotifyPlayer({
     setIsPlaying(true); // Optimistic UI
 
     try {
+      // Use the existing supabase client to get the session token
+      const { supabase } = await import("@/lib/supabase");
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      
+      const token = currentSession?.access_token;
+      if (!token) throw new Error("Authentication required for TTS");
+
       const res = await fetch('/api/tts', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({ text: line.text, voice }),
         signal: abortController.signal
       });

@@ -1,14 +1,29 @@
+import { supabase } from "./supabase";
+
 /**
- * Routes any external URL through our server-side proxy to avoid CORS.
- * Supabase storage URLs and local blobs are passed through unchanged.
+ * Fetches an external URL through our authenticated proxy.
  */
-function proxyUrl(url: string): string {
-    // Already a relative or blob URL — no proxy needed
+async function fetchWithProxy(url: string): Promise<string> {
     if (url.startsWith("/") || url.startsWith("blob:") || url.startsWith("data:")) return url;
-    // Already pointing at our own server
-    if (typeof window !== "undefined" && url.startsWith(window.location.origin)) return url;
-    // Proxy everything else
-    return `/api/proxy-file?url=${encodeURIComponent(url)}`;
+
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) throw new Error("Authentication required to fetch external content.");
+
+    const proxiedUrl = `/api/proxy-file?url=${encodeURIComponent(url)}`;
+    const res = await fetch(proxiedUrl, {
+        headers: {
+            "Authorization": `Bearer ${token}`
+        }
+    });
+
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to fetch proxied content: ${res.statusText}`);
+    }
+
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
 }
 
 /**
@@ -30,7 +45,8 @@ export async function extractPdfText(url: string, maxPages: number = 50): Promis
     const pdfjsLib = await import("pdfjs-dist");
     pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
-    const doc = await withTimeout(pdfjsLib.getDocument(proxyUrl(url)).promise, 30_000, "PDF load");
+    const pdfUrl = await fetchWithProxy(url);
+    const doc = await (await withTimeout(pdfjsLib.getDocument(pdfUrl).promise, 30_000, "PDF load")) as any;
     let fullText = "";
 
     const totalPages = doc.numPages;
@@ -38,7 +54,7 @@ export async function extractPdfText(url: string, maxPages: number = 50): Promis
 
     for (let i = 1; i <= totalPages; i += step) {
         if (fullText.length > 50_000) break;
-        const page = await withTimeout(doc.getPage(i), 10_000, `PDF page ${i}`);
+        const page = await (await withTimeout(doc.getPage(i), 10_000, `PDF page ${i}`)) as any;
         const textContent = await page.getTextContent();
         const pageText = textContent.items.map((item: any) => item.str).join(" ");
         fullText += `[Page ${i}]\n${pageText}\n\n`;
@@ -52,8 +68,9 @@ export async function extractPdfText(url: string, maxPages: number = 50): Promis
  * Uses a per-chapter timeout so one bad chapter doesn't hang the whole operation.
  */
 export async function extractEpubText(url: string): Promise<string> {
-    const ePub = (await import("epubjs")).default;
-    const book = ePub(proxyUrl(url));
+    const ePub = (await import("epubjs")).default as any;
+    const epubUrl = await fetchWithProxy(url);
+    const book = ePub(epubUrl);
 
     await withTimeout(book.ready, 20_000, "EPUB open");
 

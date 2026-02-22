@@ -6,6 +6,8 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { type User } from "@supabase/supabase-js";
 import { onAuthStateChanged, signInWithEmail, signUpWithEmail, signOut } from "@/lib/auth-service";
+import { playerStore } from "@/lib/player-store";
+import { generationStore } from "@/lib/generation-store";
 
 interface AuthContextType {
   user: User | null;
@@ -70,6 +72,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const handleSignOut = async () => {
     try {
+      playerStore.close();
+      generationStore.clear();
       await signOut();
     } catch (error) {
       console.error("Sign out failed:", error);

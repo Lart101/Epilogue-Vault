@@ -1,6 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
+import { supabase } from "@/lib/supabase";
+
+async function verifyAuth(req: Request) {
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) return null;
+
+    const token = authHeader.replace("Bearer ", "");
+    const { data, error } = await supabase.auth.getUser(token);
+
+    if (error || !data?.user) return null;
+    return data.user;
+}
 
 export async function GET(request: NextRequest) {
+    const user = await verifyAuth(request);
+    if (!user) {
+        return new NextResponse("Unauthorized", { status: 401 });
+    }
+
     const url = request.nextUrl.searchParams.get("url");
 
     if (!url) {
@@ -10,6 +27,18 @@ export async function GET(request: NextRequest) {
     // Security: Only allow http/https
     if (!url.startsWith("http")) {
         return new NextResponse("Invalid URL", { status: 400 });
+    }
+
+    const WHITELISTED_DOMAINS = [
+        "archive.org",
+        "gutenberg.org",
+        "supabase.co",
+        "google.com",
+    ];
+
+    const isWhitelisted = WHITELISTED_DOMAINS.some(domain => url.includes(domain));
+    if (!isWhitelisted) {
+        return new NextResponse("Forbidden: Domain not whitelisted", { status: 403 });
     }
 
     // Do not proxy internal Supabase URLs - they should be accessed directly

@@ -16,6 +16,7 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useState, useEffect } from "react";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Magnetic } from "./ui/magnetic";
 import { useScroll, useSpring as useSpringMotion } from "framer-motion";
 
@@ -30,6 +31,7 @@ export function Navbar() {
   const pathname = usePathname();
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
   const { scrollYProgress } = useScroll();
   const scaleX = useSpringMotion(scrollYProgress, {
@@ -153,7 +155,10 @@ export function Navbar() {
               </Link>
 
               <DropdownMenuItem
-                onClick={signOut}
+                onClick={(e) => {
+                  e.preventDefault();
+                  setShowLogoutConfirm(true);
+                }}
                 className="rounded-2xl px-4 py-3 text-sm font-semibold text-destructive focus:bg-destructive/10 focus:text-destructive cursor-pointer transition-all mt-1"
               >
                 <LogOut className="w-4 h-4 mr-3" />
@@ -171,6 +176,19 @@ export function Navbar() {
           </button>
         </div>
       </header>
+
+      <ConfirmDialog
+        open={showLogoutConfirm}
+        onClose={() => setShowLogoutConfirm(false)}
+        onConfirm={() => {
+          setShowLogoutConfirm(false);
+          signOut();
+        }}
+        title="Relinquish Controls?"
+        description="Are you sure you want to sign out of the Vault? Your digital residency will be paused until you return."
+        confirmLabel="Deactivate Session"
+        variant="danger"
+      />
 
       {/* Mobile Sidebar Overlay */}
       <AnimatePresence>

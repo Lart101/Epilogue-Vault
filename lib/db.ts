@@ -1,6 +1,12 @@
 
 import { supabase } from "./supabase";
-import { type User } from "@supabase/supabase-js";
+import { createClient, type User } from "@supabase/supabase-js";
+
+// Keep admin client strictly server-side only
+const supabaseAdmin = process.env.SUPABASE_SERVICE_ROLE_KEY ? createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+) : null;
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -373,6 +379,87 @@ export async function addStoreBookToLibrary(
 }
 
 // ─── AI Artifacts ───────────────────────────────────────────────────────────
+
+export async function copySharedAiArtifacts(
+    targetUid: string,
+    targetBookId: string,
+    storeBookId: string,
+    tone: string
+): Promise<boolean> {
+    if (!supabaseAdmin) {
+        console.warn("Missing service role key, cannot search global resonance.");
+        return false;
+    }
+
+    // 1. Find all local book_ids that map to this public store book
+    const { data: relatedBooks } = await supabaseAdmin
+        .from("user_books")
+        .select("id")
+        .eq("store_book_id", storeBookId);
+
+    if (!relatedBooks || relatedBooks.length === 0) return false;
+    const bookIds = relatedBooks.map(b => b.id);
+
+    // 2. Find ONE shared "podcast-series" for these books matching the tone
+    const { data: seriesList } = await supabaseAdmin
+        .from("ai_artifacts")
+        .select("*")
+        .eq("type", "podcast-series")
+        .is("deleted_at", null)
+        .in("book_id", bookIds)
+        .filter("content->>_toneId", "eq", tone) // Note: tone is passed as the ID (e.g., 'academic')
+        .limit(1);
+
+    const sourceSeries = seriesList?.[0];
+    if (!sourceSeries) return false; // No generation exists globally for this tone
+
+    const toneLabel = sourceSeries.content.tone; // e.g. "Philosophical"
+
+    // 3. Find all episodes ("podcast") that belong to the SAME source book_id and tone
+    //    Try matching on _toneId first (new format saved after the recent fix)
+    let { data: sourceEpisodes } = await supabaseAdmin
+        .from("ai_artifacts")
+        .select("*")
+        .eq("type", "podcast")
+        .is("deleted_at", null)
+        .eq("book_id", sourceSeries.book_id)
+        .filter("content->>_toneId", "eq", tone);
+
+    // Fallback: for legacy data saved before _toneId was embedded, use title LIKE
+    if (!sourceEpisodes || sourceEpisodes.length === 0) {
+        const toneLabel = sourceSeries.content.tone; // e.g. "Philosophical"
+        const { data: fallbackEpisodes } = await supabaseAdmin
+            .from("ai_artifacts")
+            .select("*")
+            .eq("type", "podcast")
+            .is("deleted_at", null)
+            .eq("book_id", sourceSeries.book_id)
+            .like("title", `%(${toneLabel})%`);
+        sourceEpisodes = fallbackEpisodes;
+    }
+
+    if (!sourceEpisodes || sourceEpisodes.length === 0) return false;
+
+    // 4. Duplicate the series to the target user
+    await saveAiArtifact(targetUid, {
+        book_id: targetBookId,
+        type: "podcast-series",
+        title: sourceSeries.title,
+        content: sourceSeries.content,
+    });
+
+    // 5. Duplicate all episodes to the target user
+    for (const ep of sourceEpisodes) {
+        await saveAiArtifact(targetUid, {
+            book_id: targetBookId,
+            type: "podcast",
+            title: ep.title,
+            content: ep.content,
+        });
+    }
+
+    return true; // Successfully copied!
+}
 
 export async function saveAiArtifact(
     uid: string,

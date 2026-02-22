@@ -1,14 +1,5 @@
-import Groq from "groq-sdk";
-
-// Ordered array of Groq models to maximize throughput and minimize rate-limit errors (429s).
-// Sorted generally from highest TPM to lowest to ensure the primary generator doesn't easily hit a wall.
-const FALLBACK_MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-70b-versatile",
-    "llama-3.1-8b-instant",
-    "mixtral-8x7b-32768",
-    "gemma2-9b-it",
-];
+import { supabase } from "./supabase";
+import { GROQ_FALLBACK_MODELS } from "./ai-config";
 
 export interface Episode {
     id: string;
@@ -230,56 +221,28 @@ function parseGroqJson(text: string) {
  * Cascading executor that iterates through our FALLBACK_MODELS on Groq.
  * For each model, it will attempt up to 'maxRetries' times if it hits a 429 or 503.
  */
-async function executeWithFallback(prompt: string, maxRetriesPerModel = 2): Promise<string> {
-    const apiKey = process.env.NEXT_PUBLIC_GROQ_API_KEY;
-    if (!apiKey) {
-        throw new Error("Aether credentials (API Key) not found in environment.");
-    }
-    const groq = new Groq({ apiKey, dangerouslyAllowBrowser: true });
-    let lastError: any = null;
+async function executeWithFallback(prompt: string): Promise<string> {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
 
-    for (const modelName of FALLBACK_MODELS) {
-        console.log(`[Groq] Attempting generation with model: ${modelName}`);
-        let retries = 0;
-
-        while (retries <= maxRetriesPerModel) {
-            try {
-                const completion = await groq.chat.completions.create({
-                    messages: [{ role: "user", content: prompt }],
-                    model: modelName,
-                    response_format: { type: "json_object" },
-                    temperature: 0.7,
-                });
-                return completion.choices[0]?.message?.content || "";
-            } catch (error: any) {
-                lastError = error;
-                const isRateLimit = error.status === 429;
-                const isOverloaded = error.status === 503;
-
-                if (!isRateLimit && !isOverloaded) {
-                    console.error(`[Groq] Fatal error on ${modelName}, aborting model.`, error.message);
-                    break;
-                }
-
-                retries++;
-
-                if (isRateLimit) {
-                    console.warn(`[Groq API] ${modelName} hit 429 Rate Limit. Instantly falling back to next model...`);
-                    break;
-                }
-
-                if (retries <= maxRetriesPerModel) {
-                    const baseDelay = 5000;
-                    const waitTime = baseDelay * retries;
-                    console.warn(`[Groq API] ${modelName} hit 503 Overloaded. Retrying in ${waitTime / 1000}s... (Attempt ${retries}/${maxRetriesPerModel})`);
-                    await new Promise((resolve) => setTimeout(resolve, waitTime));
-                } else {
-                    console.warn(`[Groq API] ${modelName} exhausted limits. Falling back to next model...`);
-                }
-            }
-        }
+    if (!token) {
+        throw new Error("Authentication required for generation.");
     }
 
-    console.error("[Groq API] ALL fallback models exhausted.", lastError);
-    throw new Error(lastError?.message || "Complete API failure across all fallback models.");
+    const res = await fetch("/api/ai/generate", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ prompt })
+    });
+
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Unknown error" }));
+        throw new Error(err.error || `AI API failed with status ${res.status}`);
+    }
+
+    const data = await res.json();
+    return data.text || "";
 }

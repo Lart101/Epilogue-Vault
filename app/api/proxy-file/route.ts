@@ -1,10 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
+import { supabase } from "@/lib/supabase";
+
+async function verifyAuth(req: Request) {
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) return null;
+
+    const token = authHeader.replace("Bearer ", "");
+    const { data, error } = await supabase.auth.getUser(token);
+
+    if (error || !data?.user) return null;
+    return data.user;
+}
 
 /**
  * Proxy route to fetch external book files server-side, avoiding CORS.
  * Usage: GET /api/proxy-file?url=https://...
  */
 export async function GET(req: NextRequest) {
+    const user = await verifyAuth(req);
+    if (!user) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const url = req.nextUrl.searchParams.get("url");
 
     if (!url) {
@@ -16,30 +33,51 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "Invalid URL scheme" }, { status: 400 });
     }
 
+    const WHITELISTED_DOMAINS = [
+        "archive.org",
+        "gutenberg.org",
+        "supabase.co",
+        "google.com",
+    ];
+
+    const isWhitelisted = WHITELISTED_DOMAINS.some(domain => url.includes(domain));
+    if (!isWhitelisted) {
+        return NextResponse.json({ error: "Domain not whitelisted" }, { status: 403 });
+    }
+
     try {
-        const res = await fetch(url, {
+        const response = await fetch(url, {
             headers: {
-                // Some servers require a user-agent
-                "User-Agent": "Mozilla/5.0 (compatible; EpilogueVault/1.0)",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "*/*",
             },
-            // Server-side fetch has no CORS restriction
         });
 
-        if (!res.ok) {
-            return NextResponse.json({ error: `Upstream error: ${res.status}` }, { status: res.status });
+        if (!response.ok) {
+            console.error(`Upstream error in proxy-file for ${url}: ${response.status} ${response.statusText}`);
+            return NextResponse.json({
+                error: `Upstream error: ${response.statusText}`,
+                status: response.status
+            }, { status: response.status });
         }
 
-        const blob = await res.blob();
-        const contentType = res.headers.get("content-type") || "application/octet-stream";
+        const contentType = response.headers.get("Content-Type") || "application/octet-stream";
+        const contentLength = response.headers.get("Content-Length");
 
-        return new NextResponse(blob, {
+        const headers = new Headers();
+        headers.set("Content-Type", contentType);
+        if (contentLength) headers.set("Content-Length", contentLength);
+        headers.set("Cache-Control", "public, max-age=3600");
+
+        return new NextResponse(response.body, {
             status: 200,
-            headers: {
-                "Content-Type": contentType,
-                "Cache-Control": "public, max-age=3600",
-            },
+            headers,
         });
     } catch (err: any) {
-        return NextResponse.json({ error: err.message || "Proxy failed" }, { status: 500 });
+        console.error("Critical Proxy-File Error:", err);
+        return NextResponse.json({
+            error: err.message || "Proxy failed",
+            details: String(err)
+        }, { status: 500 });
     }
 }

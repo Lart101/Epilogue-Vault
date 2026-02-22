@@ -1,6 +1,19 @@
 import { NextResponse } from 'next/server';
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
 
+import { supabase } from '@/lib/supabase';
+
+async function verifyAuth(req: Request) {
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) return null;
+
+    const token = authHeader.replace("Bearer ", "");
+    const { data, error } = await supabase.auth.getUser(token);
+
+    if (error || !data?.user) return null;
+    return data.user;
+}
+
 function escapeXml(unsafe: string) {
     return unsafe.replace(/[<>&'"]/g, function (c) {
         switch (c) {
@@ -15,6 +28,11 @@ function escapeXml(unsafe: string) {
 }
 
 export async function POST(req: Request) {
+    const user = await verifyAuth(req);
+    if (!user) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     let lastErr: any = null;
     let retries = 0;
     const maxRetries = 3;

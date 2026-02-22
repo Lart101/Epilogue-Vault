@@ -9,8 +9,11 @@
 import { extractEpubText, extractPdfText } from "@/lib/extractors";
 import { generateEpisodeScript, generateSeriesOutline, PODCAST_TONES, PodcastSeries } from "@/lib/gemini";
 import { saveAiArtifact, UserBook } from "@/lib/db";
+import { supabase } from "@/lib/supabase";
 import { generationStore } from "@/lib/generation-store";
 import { notificationStore } from "@/lib/notification-store";
+import { optimizeForOutline, optimizeForEpisode } from "@/lib/content-optimizer";
+import { GENERATION_CONFIG } from "@/lib/ai-config";
 
 export type OnSeriesDone = (series: Omit<PodcastSeries, "id" | "bookId" | "createdAt">) => void;
 export type OnEpisodeDone = (episodeNumber: number, episodeTitle: string) => void;
@@ -30,12 +33,60 @@ export async function runFullSeriesGeneration(
         bookTitle: book.title,
         bookCover: book.coverUrl,
         tone: tone.label,
-        status: "extracting",
-        label: "Extracting text...",
+        status: "extracting", // Initial status
+        label: "Checking archives...",
     });
 
     try {
+        // ── 0. Attempt Global Resonance (Sharing) ─────────────────────────────
+        if (book.storeBookId) {
+            generationStore.update(jobId, { status: "extracting", label: "Searching global resonance..." });
+
+            const { data: { session } } = await supabase.auth.getSession();
+            const token = session?.access_token;
+
+            if (token) {
+                try {
+                    const shareRes = await fetch("/api/ai/share", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Authorization": `Bearer ${token}`
+                        },
+                        body: JSON.stringify({
+                            targetBookId: book.id,
+                            storeBookId: book.storeBookId,
+                            toneId: tone.id
+                        })
+                    });
+
+                    if (shareRes.ok) {
+                        const { success } = await shareRes.json();
+                        if (success) {
+                            console.log("Global Resonance success! Copied artifacts.");
+                            generationStore.update(jobId, { status: "done", label: "Recovered from Archive!" });
+                            notificationStore.push({
+                                type: "success",
+                                title: `"${book.title}" Recovered`,
+                                body: `Found a shared ${tone.label} series! Available immediately.`,
+                                bookCover: book.coverUrl,
+                                bookTitle: book.title,
+                            });
+
+                            // We trigger onSeriesOutlineDone with null or an empty structure, 
+                            // indicating the UI should just refetch all artifacts from DB
+                            onSeriesOutlineDone?.({} as any);
+                            return; // STOP EXECUTION! Everything is already generated.
+                        }
+                    }
+                } catch (e) {
+                    console.error("Global Resonance check failed, falling back to generation:", e);
+                }
+            }
+        }
+
         // ── 1. Extract text ───────────────────────────────────────────────────
+        generationStore.update(jobId, { status: "extracting", label: "Extracting text..." });
         let text = "";
         try {
             text = book.fileType === "epub"
@@ -46,10 +97,10 @@ export async function runFullSeriesGeneration(
             text = `Title: ${book.title}\nAuthor: ${book.author}`;
         }
 
-        // ── 2. Generate series outline ────────────────────────────────────────
+        // ── 2. Generate series outline (with smart truncation) ──────────────────
         generationStore.update(jobId, { status: "planning", label: "Architecting series..." });
-
-        const outline = await generateSeriesOutline(book.title, book.author, text, tone.label);
+        const optimizedText = optimizeForOutline(text);
+        const outline = await generateSeriesOutline(book.title, book.author, optimizedText, tone.label);
         const outlineWithTone = { ...outline, tone: tone.label, _toneId: tone.id };
 
         await saveAiArtifact(book.user_id, {
@@ -70,9 +121,9 @@ export async function runFullSeriesGeneration(
         // Notify components the outline is ready so they can show episode list
         onSeriesOutlineDone?.(outlineWithTone);
 
-        // ── 3. Generate every episode in every season ─────────────────────────
+        // ── 3. Generate episodes in parallel batches of 3 ───────────────────────
         const seasons = outline.seasons || [
-            { number: 1, title: "Archive Echoes", description: "", episodes: outline.episodes || [] },
+            { number: 1, title: "Archive Echoes", description: "", episodes: (outline as any).episodes || [] },
         ];
 
         const allEpisodes = seasons.flatMap(s => s.episodes.map(ep => ({ season: s, episode: ep })));
@@ -86,43 +137,64 @@ export async function runFullSeriesGeneration(
             seasons,
         };
 
-        for (let i = 0; i < allEpisodes.length; i++) {
-            const { season, episode } = allEpisodes[i];
+        const BATCH_SIZE = GENERATION_CONFIG.episodeBatchSize;
+        let completedCount = 0;
+
+        for (let batchStart = 0; batchStart < allEpisodes.length; batchStart += BATCH_SIZE) {
+            const batch = allEpisodes.slice(batchStart, batchStart + BATCH_SIZE);
+
             generationStore.update(jobId, {
                 status: "generating",
-                label: `Episode ${episode.number}/${total}: "${episode.title}"`,
+                label: `Episodes ${batchStart + 1}–${Math.min(batchStart + BATCH_SIZE, total)}/${total}...`,
             });
 
-            try {
-                const scriptResult = await generateEpisodeScript(normalizedSeries, episode, text);
+            await Promise.allSettled(
+                batch.map(async ({ season: _season, episode }) => {
+                    try {
+                        // Smart content slice: only send relevant portion per episode
+                        const episodeContent = optimizeForEpisode(
+                            text,
+                            episode.contentFocus || episode.description || "",
+                            episode.number,
+                            total
+                        );
 
-                await saveAiArtifact(book.user_id, {
-                    book_id: book.id,
-                    type: "podcast",
-                    title: `${outline.title} (${tone.label}) - Ep ${episode.number}: ${episode.title}`,
-                    content: scriptResult,
-                });
+                        const scriptResult = await generateEpisodeScript(normalizedSeries, episode, episodeContent);
 
-                notificationStore.push({
-                    type: "episode",
-                    title: `Episode Ready`,
-                    body: `Ep ${episode.number}: "${episode.title}" from ${book.title} is now playable.`,
-                    bookCover: book.coverUrl,
-                    bookTitle: book.title,
-                });
+                        await saveAiArtifact(book.user_id, {
+                            book_id: book.id,
+                            type: "podcast",
+                            title: `${outline.title} (${tone.label}) - Ep ${episode.number}: ${episode.title}`,
+                            content: { ...scriptResult, _toneId: tone.id, _toneLabel: tone.label },
+                        });
 
-                onEpisodeDone?.(episode.number, episode.title);
-            } catch (epErr: any) {
-                console.error(`Failed to generate episode ${episode.number}:`, epErr);
-                notificationStore.push({
-                    type: "error",
-                    title: `Episode ${episode.number} Failed`,
-                    body: `"${episode.title}" could not be recorded. ${epErr.message || "Try regenerating it manually."}`,
-                    bookCover: book.coverUrl,
-                    bookTitle: book.title,
-                });
-                onEpisodeFailed?.(episode.number, episode.title);
-            }
+                        completedCount++;
+                        generationStore.update(jobId, {
+                            label: `${completedCount}/${total} episodes ready...`,
+                        });
+
+                        notificationStore.push({
+                            type: "episode",
+                            title: `Episode Ready`,
+                            body: `Ep ${episode.number}: "${episode.title}" from ${book.title} is now playable.`,
+                            bookCover: book.coverUrl,
+                            bookTitle: book.title,
+                        });
+
+                        onEpisodeDone?.(episode.number, episode.title);
+                    } catch (epErr: any) {
+                        console.error(`Failed to generate episode ${episode.number}:`, epErr);
+                        notificationStore.push({
+                            type: "error",
+                            title: `Episode ${episode.number} Failed`,
+                            body: `"${episode.title}" could not be recorded. ${epErr.message || "Try regenerating it manually."}`,
+                            bookCover: book.coverUrl,
+                            bookTitle: book.title,
+                        });
+                        onEpisodeFailed?.(episode.number, episode.title);
+                    }
+                })
+            );
         }
 
         // ── 4. All done ───────────────────────────────────────────────────────

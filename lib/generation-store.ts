@@ -1,6 +1,9 @@
 /**
- * Module-level generation store — no React dependency.
- * Fires subscribe callbacks when jobs change so any component can react.
+ * generation-store.ts
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Module-level pub/sub store for AI series generation jobs.
+ * Zero React dependency — any component can subscribe and react to changes.
+ * Used to drive the floating generation pill and the archive card overlays.
  */
 
 export type JobStatus = "pending" | "extracting" | "planning" | "generating" | "done" | "error";
@@ -51,6 +54,11 @@ class GenerationStore {
 
     getAll() {
         return Array.from(this.jobs.values());
+    }
+
+    clear() {
+        this.jobs.clear();
+        this.notify();
     }
 }
 
