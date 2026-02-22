@@ -39,21 +39,24 @@ export function ResonanceArchives({ userId, onReplay, onOpenDetail }: ResonanceA
   // A standalone episode is one that does not start with the title of ANY existing series for the same book
   const standaloneEpisodes = artifacts.filter(a => {
     if (a.type !== "podcast") return false;
-    
-    // Check if it belongs to any of our known series for this book
     const possibleParents = seriesArtifacts.filter(s => s.book_id === a.book_id);
     const isChild = possibleParents.some(s => {
-       const sc = s.content as any;
-       const toneLabel = sc?.tone || "philosophical";
-       // If the episode title matches the series title, or the tone, it belongs to the series container
-       return a.title.includes(sc?.title) || a.title.includes(toneLabel) || (a.content as any)?.tone === toneLabel;
+      const sc = s.content as any;
+      // Primary: _toneId match in episode content (reliable, always set for new data)
+      if (sc._toneId && (a.content as any)._toneId === sc._toneId) return true;
+      // Fallback: tone label in episode content
+      const toneLabel = sc?.tone;
+      if (toneLabel && (a.content as any)?._toneLabel === toneLabel) return true;
+      // Last resort: title contains the tone label in parens
+      return toneLabel ? a.title.includes(`(${toneLabel})`) : false;
     });
-    
     return !isChild;
   });
 
-  // Deduplicate series so we only show one card per book, even with multiple tones
-  const podcastSeries = artifacts.filter(a => a.type === "podcast-series");
+  // Sort newest-first before deduplication so Map retains the most recent series per book
+  const podcastSeries = [...artifacts]
+    .filter(a => a.type === "podcast-series")
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   const uniqueSeriesByBook = Array.from(
     new Map(podcastSeries.map(a => [a.book_id, a])).values()
   );
@@ -63,24 +66,26 @@ export function ResonanceArchives({ userId, onReplay, onOpenDetail }: ResonanceA
     ...standaloneEpisodes,
   ];
 
+  // Ref to track previous job count — avoids stale closure in subscribe callback
+  const prevJobsCountRef = useRef(0);
+
   useEffect(() => { 
     loadData(); 
 
-    let prevJobsCount = 0;
     const unsub = generationStore.subscribe((jobs) => {
        const active = jobs.filter(j => j.status !== "done" && j.status !== "error");
        setActiveJobs(active);
        
        // If a job finished, refresh the archives to fetch the new artifact
-       if (active.length < prevJobsCount) {
+       if (active.length < prevJobsCountRef.current) {
          loadData();
        }
-       prevJobsCount = active.length;
+       prevJobsCountRef.current = active.length;
     });
 
     const currActive = generationStore.getAll().filter(j => j.status !== "done" && j.status !== "error");
     setActiveJobs(currActive);
-    prevJobsCount = currActive.length;
+    prevJobsCountRef.current = currActive.length;
 
     return () => { unsub(); };
   }, [userId]);
@@ -111,14 +116,16 @@ export function ResonanceArchives({ userId, onReplay, onOpenDetail }: ResonanceA
     setIsDeleting(true);
     try {
       if (pendingTrash.type === "podcast-series") {
+        const toneId = (pendingTrash.content as any)._toneId;
         const toneLabel = (pendingTrash.content as any).tone;
         
-        // Find all child episodes of THIS specific series (by book_id and tone label)
-        const childEpisodes = artifacts.filter(a => 
-          a.type === "podcast" && 
-          a.book_id === pendingTrash.book_id &&
-          (!toneLabel || a.title.includes(`(${toneLabel})`))
-        );
+        // Find child episodes by _toneId (reliable) then fall back to title pattern
+        const childEpisodes = artifacts.filter(a => {
+          if (a.type !== "podcast" || a.book_id !== pendingTrash.book_id) return false;
+          if (toneId && (a.content as any)._toneId === toneId) return true;
+          // Fallback: tone label in title (legacy data) — only if toneLabel is non-null
+          return !!(toneLabel && a.title.includes(`(${toneLabel})`));
+        });
         
         // Trash the series and all its episodes
         await Promise.all([

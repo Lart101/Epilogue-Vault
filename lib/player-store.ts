@@ -97,7 +97,10 @@ class PlayerStore {
 
     navigateToEpisode(index: number) {
         if (!this.state.series || !this.onNavigateEpisode) return;
-        const episodes = this.state.series.seasons.flatMap(s => s.episodes);
+        // Support both season-nested and flat-episode series formats
+        const episodes = (this.state.series.seasons?.length)
+            ? this.state.series.seasons.flatMap(s => s.episodes)
+            : (this.state.series as any).episodes || [];
         const target = episodes[index];
         if (target) {
             this.onNavigateEpisode(target, index);

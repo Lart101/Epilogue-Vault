@@ -317,7 +317,12 @@ export default function ResonanceLab() {
 
     getUserAiArtifacts(userId, "podcast").then(artifacts => {
       const match = artifacts.find(a =>
-        a.book_id === detailBook.id && a.content?.episodeNumber === episode.number
+        a.book_id === detailBook.id && (
+          // Try episodeNumber field, fall back to title match
+          a.content?.episodeNumber === episode.number ||
+          (a.content as any)?.number === episode.number ||
+          a.title === episode.title
+        )
       );
 
       if (match) {
@@ -348,8 +353,20 @@ export default function ResonanceLab() {
       playerStore.setGenerating(detailBook, episode.title, normalizedSeries, index);
 
       const scriptResult = await generateEpisodeScript(normalizedSeries,
-        { ...episode, id: episode.id || `ep-${episode.number}` }, "");
-      await saveAiArtifact(userId, { book_id: detailBook.id, type: "podcast", title: episode.title, content: scriptResult });
+        { ...episode, id: `ep-${episode.number}` }, "");
+      await saveAiArtifact(userId, {
+        book_id: detailBook.id,
+        type: "podcast",
+        // Use same title format as all other save paths for consistent lookup
+        title: `${normalizedSeries.title} (${normalizedSeries.tone}) - Ep ${episode.number}: ${episode.title}`,
+        content: {
+          ...scriptResult,
+          episodeNumber: episode.number,
+          _toneId: PODCAST_TONES.find(t => t.label === normalizedSeries.tone || t.id === normalizedSeries.tone)?.id,
+          _toneLabel: normalizedSeries.tone,
+        },
+      });
+
       playerStore.play(scriptResult, detailBook, episode.title, normalizedSeries, index);
       toast.success(`"${episode.title}" is ready to play!`);
     } catch (err: any) {
@@ -373,9 +390,9 @@ export default function ResonanceLab() {
     }
 
     toast.info(`Initialising resonance extraction for ${detailBook.title}...`);
-    runFullSeriesGeneration(detailBook, toneTarget, () => {
-      setDetailArtifact(null);
-    });
+    // Pass undefined for onSeriesOutlineDone — the ResonanceDetail modal stays open
+    // and its own generationStore subscription handles the data refresh when done.
+    runFullSeriesGeneration(detailBook, toneTarget);
   };
 
   return (

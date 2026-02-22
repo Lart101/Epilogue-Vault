@@ -2,7 +2,7 @@ import { supabase } from "./supabase";
 import { GROQ_FALLBACK_MODELS } from "./ai-config";
 
 export interface Episode {
-    id: string;
+    id?: string;  // AI-generated outlines never include this — always use episode.number
     number: number;
     title: string;
     description: string;
@@ -112,8 +112,11 @@ export async function generateEpisodeScript(
 ): Promise<PodcastScript> {
     // We instantiate Groq inside the fallback executor now.
 
-    const currentSeason = series.seasons.find(s => s.episodes.some(e => e.id === episode.id)) || series.seasons[0];
-    const episodeInSeason = currentSeason.episodes.findIndex(e => e.id === episode.id) + 1;
+    // Match by episode.number — episode.id is an empty string in AI-generated outlines
+    const currentSeason = series.seasons?.find(s => s.episodes.some(e => e.number === episode.number))
+        || series.seasons?.[0]
+        || { number: 1, title: (series as any).title, description: "", episodes: (series as any).episodes || [] };
+    const episodeInSeason = currentSeason.episodes.findIndex(e => e.number === episode.number) + 1;
     const totalInSeason = currentSeason.episodes.length;
 
     const prompt = `
@@ -170,50 +173,73 @@ Format the output as a JSON object:
 
 function parseGroqJson(text: string) {
     try {
-        // Strip markdown formatting if present
-        let clean = text.trim();
-        if (clean.startsWith('```json')) {
-            clean = clean.replace(/^```json/, '');
-        } else if (clean.startsWith('```')) {
-            clean = clean.replace(/^```/, '');
-        }
-        if (clean.endsWith('```')) {
-            clean = clean.replace(/```$/, '');
+        // ── Step 1: Strip markdown fences ────────────────────────────────────
+        let clean = text.trim()
+            .replace(/^```(?:json)?\s*/i, '')
+            .replace(/\s*```$/, '')
+            .trim();
+
+        // ── Step 2: Detect truncated responses early ──────────────────────────
+        // If the response ends without a closing } or ], the model was cut off
+        const lastSignificantChar = clean.replace(/[\s,]+$/, '').slice(-1);
+        if (lastSignificantChar && lastSignificantChar !== '}' && lastSignificantChar !== ']') {
+            // Allow trailing } that may close a nested object — just attempt parse
+            console.warn('[Groq Parser] Response may be truncated, last char:', JSON.stringify(lastSignificantChar));
         }
 
-        clean = clean.trim();
-
-        // Fallback: extract just the object or array if extra text surrounds it
+        // ── Step 3: Extract the outermost object/array ────────────────────────
         const jsonMatch = clean.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
-
         let jsonString = jsonMatch ? jsonMatch[0] : clean;
 
-        // Common LLM fixes: Remove trailing commas before closing braces/brackets
-        jsonString = jsonString.replace(/,\s*([}\]])/g, '$1');
+        // ── Step 4: Common LLM fixes ──────────────────────────────────────────
+        // Remove trailing commas before } or ]
+        jsonString = jsonString.replace(/,\s*([\]}])/g, '$1');
 
+        // ── Step 5: Try parsing as-is ─────────────────────────────────────────
         try {
             return JSON.parse(jsonString);
-        } catch (parseErr: any) {
-            // Secondary attempt: escape unescaped literal newlines in string properties
-            // (Gemini sometimes accidentally outputs literal newlines instead of \n)
-            const sanitizedString = jsonString.replace(/[\u0000-\u001F]+/g, (match) => {
-                // If it's pure whitespace structural spacing, it's fine, but 
-                // inside quotes it breaks JSON.parse. A blanket remove of dangerous controls can help.
-                if (match === '\n' || match === '\r' || match === '\t') return match;
-                return ''; // strip other control chars
-            });
+        } catch (firstErr: any) {
+            console.warn('[Groq Parser] First parse attempt failed:', firstErr.message);
+
+            // ── Step 6: Repair unescaped double quotes inside string values ──────
+            // e.g. "text": "He said "hello" to her" → "text": "He said 'hello' to her"
+            // Strategy: find all string values and replace inner unescaped quotes with '
+            let repaired = jsonString.replace(
+                /:[ \t]*"((?:[^"\\]|\\[\s\S])*)"/g,
+                (_match: string, inner: string) => {
+                    // Re-escape any genuinely unescaped double-quotes inside string values
+                    const fixed = inner.replace(/(?<!\\)"/g, "'");
+                    return `: "${fixed}"`;
+                }
+            );
+
+            // ── Step 7: Replace literal control characters inside strings ────────
+            // LLMs sometimes output literal newlines inside JSON string values
+            repaired = repaired.replace(
+                /:[ \t]*"((?:[^"\\]|\\[\s\S])*)"/g,
+                (_match: string, inner: string) => {
+                    const fixed = inner
+                        .replace(/\r\n/g, ' ')  // CRLF → space
+                        .replace(/\r|\n/g, ' ') // lone LF/CR → space
+                        .replace(/\t/g, ' ')    // tab → space
+                        .replace(/[\x00-\x1F\x7F]/g, ''); // strip remaining ASCII controls
+                    return `: "${fixed}"`;
+                }
+            );
 
             try {
-                return JSON.parse(sanitizedString);
+                return JSON.parse(repaired);
             } catch (secondErr: any) {
-                console.error("[Groq JSON Parse Error]:", parseErr.message);
-                throw parseErr;
+                console.error('[Groq Parser] Repair attempt failed:', secondErr.message);
+                console.error('Raw text segment (first 500 chars):', text.substring(0, 500));
+                throw new Error(`Failed to extract valid JSON from AI response: ${firstErr.message}`);
             }
         }
     } catch (e: any) {
-        console.error("[Groq Parser Root Error]:", e.message);
-        console.error("Raw Text segment:", text.substring(0, 500) + "...");
-        throw new Error("Failed to extract valid JSON from the AI response.");
+        if (e.message.startsWith('Failed to extract')) throw e;
+        console.error('[Groq Parser Root Error]:', e.message);
+        console.error('Raw Text segment:', text.substring(0, 500) + '...');
+        throw new Error(`Failed to extract valid JSON from the AI response: ${e.message}`);
     }
 }
 

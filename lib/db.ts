@@ -152,6 +152,7 @@ export async function getUserBook(uid: string, bookId: string): Promise<UserBook
         .from("user_books")
         .select("*")
         .eq("id", bookId)
+        .eq("user_id", uid)  // Security: ensure callers can only read their own books
         .single();
 
     if (error) return null;
@@ -403,87 +404,102 @@ export async function copySharedAiArtifacts(
 
         bookIds = (relatedBooks ?? []).map(b => b.id);
     } else if (bookTitle) {
-        // Path B: User-uploaded book — match by title (+ optional author)
+        // Use LIKE wildcards for fuzzy matching — handles "The Book" vs "Book" differences
         let query = supabaseAdmin
             .from("user_books")
-            .select("id")
-            .ilike("title", bookTitle);
+            .select("id, title")
+            .ilike("title", `%${bookTitle.slice(0, 60)}%`)
+            .neq("id", targetBookId);
 
-        if (bookAuthor) query = query.ilike("author", bookAuthor);
+        if (bookAuthor) {
+            // Match on the last/most unique word of the author name for robustness
+            const authorKeyword = bookAuthor.trim().split(/\s+/).filter(w => w.length > 3).pop() ?? bookAuthor;
+            query = query.ilike("author", `%${authorKeyword}%`);
+        }
 
-        // Exclude the target book itself so we don't self-copy
-        const { data: relatedBooks } = await query.neq("id", targetBookId);
+        const { data: relatedBooks } = await query;
         bookIds = (relatedBooks ?? []).map(b => b.id);
     }
 
     if (bookIds.length === 0) return false;
 
-    // ── Find source series — try _toneId first, fallback to tone label ─────────
-    let { data: seriesList } = await supabaseAdmin
+    // ── Step 2: Find source series — _toneId first, tone label fallback ─────
+    let { data: seriesList, error: seriesErr } = await supabaseAdmin
         .from("ai_artifacts")
-        .select("*")
+        .select("id, book_id, title, content")
         .eq("type", "podcast-series")
         .is("deleted_at", null)
         .in("book_id", bookIds)
         .filter("content->>_toneId", "eq", tone)
         .limit(1);
 
-    // Fallback: series saved before _toneId was embedded — match by tone label
+    if (seriesErr) console.error("[GlobalResonance] series lookup error:", seriesErr);
+
+    // Fallback: legacy artifacts without _toneId — match by tone label
     if (!seriesList || seriesList.length === 0) {
-        const PODCAST_TONES_MAP: Record<string, string> = {
-            "philosophical": "Deep & Philosophical",
-            "true-crime": "True Crime Suspense",
-            "humorous": "Humorous & Witty",
-            "academic": "Academic & Analytical",
-            "casual": "Casual Banter",
+        const TONE_LABELS: Record<string, string> = {
+            // Keys must match the PODCAST_TONES id values in gemini.ts
+            philosophical: "Deep & Philosophical",
+            suspense: "True Crime Suspense",
+            witty: "Humorous & Witty",
+            analytical: "Academic & Analytical",
+            casual: "Casual Banter",
         };
-        const toneLabel = PODCAST_TONES_MAP[tone];
-        if (toneLabel) {
-            const { data: fallbackSeries } = await supabaseAdmin
+        const label = TONE_LABELS[tone];
+        console.log(`[GlobalResonance] _toneId not found — trying tone label fallback: "${label}"`);
+        if (label) {
+            const { data: fb } = await supabaseAdmin
                 .from("ai_artifacts")
-                .select("*")
+                .select("id, book_id, title, content")
                 .eq("type", "podcast-series")
                 .is("deleted_at", null)
                 .in("book_id", bookIds)
-                .filter("content->>tone", "eq", toneLabel)
+                .filter("content->>tone", "eq", label)
                 .limit(1);
-            seriesList = fallbackSeries;
+            seriesList = fb;
         }
     }
 
     const sourceSeries = seriesList?.[0];
-    if (!sourceSeries) return false;
+    if (!sourceSeries) {
+        console.log(`[GlobalResonance] No source series found for tone="${tone}" — will generate fresh.`);
+        return false;
+    }
+    console.log(`[GlobalResonance] Found source series: "${sourceSeries.title}" (book_id=${sourceSeries.book_id})`);
 
-    const toneLabel = sourceSeries.content.tone;
+    const toneLabel: string = sourceSeries.content?.tone ?? tone;
 
-    // ── Find source episodes — try _toneId first, fallback to title LIKE ──────
+    // ── Step 3: Find source episodes — _toneId first, title LIKE fallback ──────
     let { data: sourceEpisodes } = await supabaseAdmin
         .from("ai_artifacts")
-        .select("*")
+        .select("id, type, title, content")
         .eq("type", "podcast")
         .is("deleted_at", null)
         .eq("book_id", sourceSeries.book_id)
         .filter("content->>_toneId", "eq", tone);
 
     if (!sourceEpisodes || sourceEpisodes.length === 0) {
-        const { data: fallbackEpisodes } = await supabaseAdmin
+        console.log("[GlobalResonance] Episodes by _toneId not found — trying title LIKE fallback");
+        const { data: fb } = await supabaseAdmin
             .from("ai_artifacts")
-            .select("*")
+            .select("id, type, title, content")
             .eq("type", "podcast")
             .is("deleted_at", null)
             .eq("book_id", sourceSeries.book_id)
-            .like("title", `%(${toneLabel})%`);
-        sourceEpisodes = fallbackEpisodes;
+            .ilike("title", `%(${toneLabel})%`);
+        sourceEpisodes = fb;
     }
 
-    if (!sourceEpisodes || sourceEpisodes.length === 0) return false;
+    if (!sourceEpisodes || sourceEpisodes.length === 0) {
+        console.log(`[GlobalResonance] No episodes found — will generate fresh.`);
+        return false;
+    }
+    console.log(`[GlobalResonance] Found ${sourceEpisodes.length} episodes to copy.`);
 
-    // ── Copy series + episodes using service-role client (bypasses RLS) ────────
-    // IMPORTANT: must use supabaseAdmin here — the request has no user session,
-    // so the regular anon client would be blocked by RLS on insert.
+    // ── Step 4: Insert series + episodes using admin client (bypasses RLS) ──────
     const now = new Date().toISOString();
 
-    const { error: seriesInsertError } = await supabaseAdmin
+    const { error: seriesInsertErr } = await supabaseAdmin
         .from("ai_artifacts")
         .insert({
             user_id: targetUid,
@@ -494,28 +510,29 @@ export async function copySharedAiArtifacts(
             created_at: now,
         });
 
-    if (seriesInsertError) {
-        console.error("Global Resonance: failed to insert series:", seriesInsertError);
+    if (seriesInsertErr) {
+        console.error("[GlobalResonance] Failed to insert series:", seriesInsertErr);
         return false;
     }
 
-    const episodeRows = sourceEpisodes.map(ep => ({
-        user_id: targetUid,
-        book_id: targetBookId,
-        type: ep.type,
-        title: ep.title,
-        content: ep.content,
-        created_at: now,
-    }));
-
-    const { error: epInsertError } = await supabaseAdmin
+    const { error: epInsertErr } = await supabaseAdmin
         .from("ai_artifacts")
-        .insert(episodeRows);
+        .insert(
+            sourceEpisodes.map(ep => ({
+                user_id: targetUid,
+                book_id: targetBookId,
+                type: "podcast",
+                title: ep.title,
+                content: ep.content,
+                created_at: now,
+            }))
+        );
 
-    if (epInsertError) {
-        console.error("Global Resonance: failed to insert episodes:", epInsertError);
+    if (epInsertErr) {
+        console.error("[GlobalResonance] Failed to insert episodes:", epInsertErr);
         return false;
     }
+
 
     return true;
 }
@@ -557,9 +574,10 @@ export async function getUserAiArtifacts(uid: string, type?: string): Promise<Ai
 }
 
 export async function deleteAiArtifact(uid: string, artifactId: string): Promise<void> {
+    // Soft-delete to match trashAiArtifact — prevents accidental data loss
     const { error } = await supabase
         .from("ai_artifacts")
-        .delete()
+        .update({ deleted_at: new Date().toISOString() })
         .eq("id", artifactId)
         .eq("user_id", uid);
 

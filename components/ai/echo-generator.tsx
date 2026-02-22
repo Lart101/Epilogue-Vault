@@ -2,24 +2,21 @@
 
 import { useState, useEffect, useRef } from "react";
 import { UserBook, getUserAiArtifacts } from "@/lib/db";
-import { extractEpubText, extractPdfText } from "@/lib/extractors";
 import {
-  generateEpisodeScript, generateSeriesOutline,
+  generateEpisodeScript,
   PODCAST_TONES, type PodcastScript, type PodcastSeries, type Episode,
 } from "@/lib/gemini";
 import { saveAiArtifact } from "@/lib/db";
-import { generationStore } from "@/lib/generation-store";
 import { runFullSeriesGeneration, retryFailedEpisodes } from "@/lib/series-generation";
 import { playerStore } from "@/lib/player-store";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Mic2, Sparkles, Layers, Play, Pause,
+  Mic2, Play, Pause,
   SkipBack, SkipForward, Loader2, ChevronRight,
-  AlertCircle, Key, Check, Headphones, Zap, Brain,
-  Laugh, Search, Coffee, ArrowLeft, X, BookOpen
+  AlertCircle, Check, Headphones, Zap, Brain,
+  Laugh, Search, Coffee, ArrowLeft, X
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -36,59 +33,6 @@ interface EchoGeneratorProps {
   initialSeries?: Omit<PodcastSeries, "id" | "bookId" | "createdAt">;
 }
 
-// ─── Fire-and-forget background series generation ────────────────────────────
-async function runBackgroundGeneration(
-  book: UserBook,
-  tone: typeof PODCAST_TONES[0],
-  onSeriesDone: (series: Omit<PodcastSeries, "id" | "bookId" | "createdAt">) => void
-) {
-  const jobId = `${book.id}-${tone.id}-${Date.now()}`;
-  generationStore.add({
-    id: jobId,
-    bookTitle: book.title,
-    bookCover: book.coverUrl,
-    tone: tone.label,
-    status: "extracting",
-    label: "Scribing the scrolls...",
-  });
-
-  try {
-    // 1. Extract text
-    let text = "";
-    try {
-      text = book.fileType === "epub"
-        ? await extractEpubText(book.fileUrl)
-        : await extractPdfText(book.fileUrl);
-    } catch (extractErr) {
-      console.warn("Extraction failed, proceeding with metadata only:", extractErr);
-      text = `Title: ${book.title}\nAuthor: ${book.author}`;
-    }
-
-    generationStore.update(jobId, { status: "planning", label: "Architecting the series..." });
-
-    // 2. Generate outline
-    const outline = await generateSeriesOutline(book.title, book.author, text, tone.label);
-
-    // 3. Save with tone in title to allow multiple tones per book
-    await saveAiArtifact(book.user_id, {
-      book_id: book.id,
-      type: "podcast-series",
-      title: `Series (${tone.label}): ${book.title}`,
-      content: { ...outline, tone: tone.label, _toneId: tone.id },
-    });
-
-    generationStore.update(jobId, { status: "done", label: `${tone.label} series ready! ✓` });
-    toast.success(`"${book.title}" — ${tone.label} series is ready!`, { duration: 5000 });
-
-    onSeriesDone(outline);
-  } catch (err: any) {
-    let msg = err.message || "Generation failed.";
-    if (msg.includes("503") || msg.toLowerCase().includes("overwhelmed")) msg = "Service busy. Try again shortly.";
-    if (msg.includes("429") || msg.toLowerCase().includes("quota")) msg = "Rate limit reached. Wait and retry.";
-    generationStore.update(jobId, { status: "error", label: msg });
-    toast.error(`Generation failed: ${msg}`);
-  }
-}
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export function EchoGenerator({ book, onClose, initialScript, initialSeries }: EchoGeneratorProps) {
@@ -134,7 +78,8 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
       setStep("selectEpisode");
       runFullSeriesGeneration(
         book, selectedTone,
-        (outline) => setSeries(outline),
+        // onSeriesOutlineDone: null means re-fetch from DB; if real outline arrives use it
+        (outline) => { if (outline) setSeries(outline); },
         (epNum) => { addReady(epNum); removeFailed(epNum); },
         (epNum) => addFailed(epNum)
       );
@@ -150,10 +95,11 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
     );
   };
 
-  // Re-run with a different tone
-  const handleChangeTone = (newTone: typeof PODCAST_TONES[0]) => {
-    setSelectedTone(newTone);
+  // Change tone: reset series context and go back to tone selection
+  const handleChangeTone = () => {
     setSeries(null);
+    setReadyEpisodes(new Set());
+    setFailedEpisodes(new Set());
     setStep("selectTone");
   };
 
@@ -216,7 +162,8 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
         book_id: book.id,
         type: "podcast",
         title: `${series?.title} (${selectedTone.label}) - Ep ${episode.number}: ${episode.title}`,
-        content: result,
+        // Embed episodeNumber for reliable lookup; _toneId for cascade-delete
+        content: { ...result, episodeNumber: episode.number, _toneId: selectedTone.id, _toneLabel: selectedTone.label },
       });
     } catch (err: any) {
       let msg = err.message || "Generation failed.";
@@ -283,7 +230,7 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
             {/* Tone badge (when past tone step) */}
             {displayStep > 0 && (
               <button
-                onClick={() => handleChangeTone(selectedTone)}
+                onClick={handleChangeTone}
                 className="flex-shrink-0 px-3 py-1.5 rounded-xl bg-white/10 border border-white/20 text-white/70 hover:text-white hover:border-white/40 transition-all text-[10px] font-bold uppercase tracking-widest"
                 title="Change tone"
               >

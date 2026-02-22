@@ -21,6 +21,9 @@ export default function EchoChronicles() {
         setBooks(data);
         setLoading(false);
       });
+    } else if (user === null) {
+      // Auth has resolved and there is no user (not just "still loading")
+      setLoading(false);
     }
   }, [user]);
 

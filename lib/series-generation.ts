@@ -61,7 +61,8 @@ export async function runFullSeriesGeneration(
                     bookCover: book.coverUrl,
                     bookTitle: book.title,
                 });
-                onSeriesOutlineDone?.({} as any);
+                // Signal completion without a series payload — caller should re-fetch from DB
+                onSeriesOutlineDone?.(null as any);
                 return;
             }
         }
@@ -106,7 +107,8 @@ export async function runFullSeriesGeneration(
                                 bookCover: book.coverUrl,
                                 bookTitle: book.title,
                             });
-                            onSeriesOutlineDone?.({} as any);
+                            // Signal completion without a series payload — caller should re-fetch from DB
+                            onSeriesOutlineDone?.(null as any);
                             return;
                         }
                     }
@@ -197,7 +199,8 @@ export async function runFullSeriesGeneration(
                             book_id: book.id,
                             type: "podcast",
                             title: `${outline.title} (${tone.label}) - Ep ${episode.number}: ${episode.title}`,
-                            content: { ...scriptResult, _toneId: tone.id, _toneLabel: tone.label },
+                            // Embed episodeNumber so lookup in the player never relies on title matching
+                            content: { ...scriptResult, episodeNumber: episode.number, _toneId: tone.id, _toneLabel: tone.label },
                         });
 
                         completedCount++;
@@ -309,7 +312,8 @@ export async function retryFailedEpisodes(
                 book_id: book.id,
                 type: "podcast",
                 title: `${series.title} (${tone.label}) - Ep ${episode.number}: ${episode.title}`,
-                content: scriptResult,
+                // Embed lookup fields so player and cascade-delete work
+                content: { ...scriptResult, episodeNumber: episode.number, _toneId: tone.id, _toneLabel: tone.label },
             });
 
             notificationStore.push({

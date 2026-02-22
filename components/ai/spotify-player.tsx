@@ -105,7 +105,7 @@ export function SpotifyPlayer({
       return;
     }
 
-    // Dynamically map the two random host names to consistent alternating voices
+    // Deterministically map 1st speaker = Host A, 2nd = Host B (avoids 'contains a' guessing)
     const speakers = Array.from(new Set(script.dialogue.filter(d => !d.text.startsWith("*[")).map(d => d.speaker)));
     const firstSpeaker = speakers[0] || "";
     const isHostA = line.speaker === firstSpeaker;
@@ -168,7 +168,7 @@ export function SpotifyPlayer({
 
     } catch (err: any) {
       if (err.name === 'AbortError') {
-        // Request was aborted, ignore gracefully
+        // Request was aborted before fetch completed — nothing to clean up
       } else {
         console.error("Audio playback error:", err);
         setIsLoadingAudio(false);
@@ -223,7 +223,10 @@ export function SpotifyPlayer({
 
   const skipForward = () => {
     if (series) {
-      const episodes = series.seasons.flatMap(s => s.episodes);
+      // Support both season-nested and flat-episode series formats
+      const episodes = (series.seasons?.length)
+        ? series.seasons.flatMap(s => s.episodes)
+        : (series as any).episodes || [];
       if (episodeIndex < episodes.length - 1) {
         playerStore.navigateToEpisode(episodeIndex + 1);
         return;
@@ -234,9 +237,13 @@ export function SpotifyPlayer({
     if (isPlaying || isLoadingAudio) playAudioLine(next);
   };
 
-  const progress = script ? (currentLineIndex / script.dialogue.length) * 100 : 0;
+  // Derive Host A for the speaker indicator in the bottom bar
+  // Use first unique non-cue speaker — same logic as playAudioLine above
   const currentLine = script?.dialogue[currentLineIndex];
-  const isHostA = currentLine?.speaker.toLowerCase().includes("a") || currentLine?.speaker.toLowerCase().includes("keeper");
+  const cueFreeDialogue = script?.dialogue.filter(d => !d.text.startsWith("*[")) || [];
+  const firstSpeakerInScript = cueFreeDialogue[0]?.speaker || "";
+  const isHostA = currentLine?.speaker === firstSpeakerInScript;
+  const progress = script ? (currentLineIndex / script.dialogue.length) * 100 : 0;
 
   return (
     <AnimatePresence>

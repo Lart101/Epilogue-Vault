@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Play, Sparkles, Layers, Calendar, Mic2, BookOpen, Wand2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -23,7 +23,7 @@ interface ResonanceDetailProps {
 export function ResonanceDetail({ 
   userId, artifact, book, onClose, onPlayEpisode, onGenerateTone 
 }: ResonanceDetailProps) {
-  const [allSeries, setAllSeries] = useState<AiArtifact[]>([artifact]);
+  const [allSeries, setAllSeries] = useState<AiArtifact[]>([]);
   const initialTone = (artifact.content as any)._toneId || 
     PODCAST_TONES.find(t => t.label === (artifact.content as any).tone)?.id || 
     "philosophical";
@@ -52,6 +52,9 @@ export function ResonanceDetail({
     loadAllSeries();
   }, [userId, book?.id]);
 
+  // Ref tracks the PREVIOUS tone so we can detect completions without stale closure
+  const prevGeneratingToneRef = useRef<string | null>(null);
+
   // Subscribe to generationStore — tracks the tone label being generated for this book
   useEffect(() => {
     const unsub = generationStore.subscribe(jobs => {
@@ -61,14 +64,15 @@ export function ResonanceDetail({
       const activeJob = jobs.find(
         j => j.bookTitle === bookTitle && j.status !== "done" && j.status !== "error"
       );
-      const prevTone = generatingTone;
       const nowTone = activeJob?.tone ?? null;
-      setGeneratingTone(nowTone);
 
-      // When any job for this book finishes, refresh allSeries
-      if (prevTone && !nowTone) {
+      // Transition: something was generating and now nothing is → refresh archives
+      if (prevGeneratingToneRef.current && !nowTone) {
         loadAllSeries();
       }
+
+      prevGeneratingToneRef.current = nowTone;
+      setGeneratingTone(nowTone);
     });
     return () => { unsub(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -228,25 +232,11 @@ export function ResonanceDetail({
               </div>
               
               {(() => {
-                  const hasLocalSeriesForTone = allSeries.some(a => 
-                    (a.content as any)._toneId === selectedToneId || 
-                    ((a.content as any).tone && PODCAST_TONES.find(t => t.label === (a.content as any).tone)?.id === selectedToneId)
-                  );
-                  if (hasLocalSeriesForTone) {
-                      return (
-                          <div className="px-6 py-4 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-500/90 text-sm font-bold tracking-wider uppercase">
-                              <Sparkles className="w-4 h-4 inline-block mr-2" />
-                              Already Synthesized
-                          </div>
-                      );
-                  }
                   // Only THIS tone's button is disabled when it's the one generating
                   const isThisToneGenerating = generatingTone === missingToneMeta?.label;
                   return (
-                      <Button 
-                        onClick={() => {
-                          onGenerateTone(selectedToneId);
-                        }}
+                      <Button
+                        onClick={() => onGenerateTone(selectedToneId)}
                         disabled={isThisToneGenerating}
                         className="bg-amber-500 hover:bg-amber-600 text-black font-bold h-12 shadow-lg shadow-amber-500/20 px-8 rounded-full"
                       >
@@ -327,7 +317,7 @@ export function ResonanceDetail({
               <div className="space-y-2">
                 {activeSeason.episodes.map((episode, idx) => (
                   <EpisodeRow
-                    key={episode.id || idx}
+                    key={episode.number || idx}
                     episode={episode}
                     season={activeSeason}
                     index={idx}
