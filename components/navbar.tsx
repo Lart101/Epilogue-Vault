@@ -23,7 +23,6 @@ const navItems = [
   { href: "/library", label: "Library", icon: Library },
   { href: "/discover", label: "Archives", icon: Compass },
   { href: "/ai-lab", label: "Resonance Lab", icon: Sparkles },
-  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function Navbar() {
@@ -145,6 +144,13 @@ export function Navbar() {
                     <ThemeToggle />
                   </div>
               </div>
+
+              <Link href="/settings">
+                <DropdownMenuItem className="rounded-2xl px-4 py-3 text-sm font-semibold text-foreground focus:bg-primary/10 focus:text-primary cursor-pointer transition-all">
+                  <Settings className="w-4 h-4 mr-3" />
+                  Scholarly Settings
+                </DropdownMenuItem>
+              </Link>
 
               <DropdownMenuItem
                 onClick={signOut}

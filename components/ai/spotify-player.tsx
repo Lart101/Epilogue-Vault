@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
   Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, 
-  X, Loader2, ChevronDown, Radio
+  X, Loader2, ChevronDown, Radio, Repeat, Repeat1
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PodcastScript, PodcastSeries } from "@/lib/gemini";
@@ -32,6 +32,12 @@ export function SpotifyPlayer({
   const [volume, setVolume] = useState(0.8);
   const [isMuted, setIsMuted] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [autoNext, setAutoNext] = useState(playerStore.getState().autoNext);
+
+  useEffect(() => {
+    const unsub = playerStore.subscribe((s) => setAutoNext(s.autoNext));
+    return () => { unsub(); };
+  }, []);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -139,6 +145,11 @@ export function SpotifyPlayer({
           playAudioLine(next);
         } else {
           setIsPlaying(false);
+          // Auto Next Play Logic
+          const state = playerStore.getState();
+          if (state.autoNext && state.series && state.currentEpisodeIndex !== -1) {
+            playerStore.navigateToEpisode(state.currentEpisodeIndex + 1);
+          }
         }
       };
 
@@ -446,6 +457,19 @@ export function SpotifyPlayer({
                 title="Toggle Script"
               >
                 <ChevronDown className={cn("w-5 h-5 transition-transform duration-500", isExpanded && "rotate-180")} />
+              </motion.button>
+
+              <motion.button
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.9 }}
+                onClick={() => { playerStore.setAutoNext(!autoNext); }}
+                className={cn(
+                  "h-10 w-10 flex items-center justify-center rounded-full transition-colors hidden sm:flex",
+                  autoNext ? "text-amber-400 bg-amber-500/10 hover:bg-amber-500/20" : "text-white/40 hover:text-white hover:bg-white/10"
+                )}
+                title={autoNext ? "Auto-Play On" : "Auto-Play Off"}
+              >
+                {autoNext ? <Repeat className="w-5 h-5" /> : <Repeat1 className="w-5 h-5 opacity-50" />}
               </motion.button>
 
               <motion.button

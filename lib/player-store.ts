@@ -10,6 +10,7 @@ export interface PlayerState {
     currentLineIndex: number;
     isPlaying: boolean;
     isGenerating: boolean;
+    autoNext: boolean;
 }
 
 const defaultState: PlayerState = {
@@ -21,6 +22,7 @@ const defaultState: PlayerState = {
     currentLineIndex: 0,
     isPlaying: false,
     isGenerating: false,
+    autoNext: true,
 };
 
 type Listener = (state: PlayerState) => void;
@@ -80,6 +82,11 @@ class PlayerStore {
 
     setPlaying(isPlaying: boolean) {
         this.state = { ...this.state, isPlaying };
+        this.notify();
+    }
+
+    setAutoNext(autoNext: boolean) {
+        this.state = { ...this.state, autoNext };
         this.notify();
     }
 
