@@ -16,6 +16,7 @@ import { AiArtifact, getUserBooks, getUserAiArtifacts, saveAiArtifact, UserBook 
 import { generateEpisodeScript, PodcastScript, PodcastSeries, Episode, Season, PODCAST_TONES } from "@/lib/gemini";
 import { playerStore } from "@/lib/player-store";
 import { runFullSeriesGeneration } from "@/lib/series-generation";
+import { generationStore } from "@/lib/generation-store";
 import { toast } from "sonner";
 
 // ── Feature registry ─────────────────────────────────────────────────────────
@@ -361,6 +362,15 @@ export default function ResonanceLab() {
     if (!userId || !detailBook) return;
     const toneTarget = PODCAST_TONES.find(t => t.id === toneId);
     if (!toneTarget) return;
+
+    // Guard: don't spawn a second job if one is already active for this book
+    const alreadyRunning = generationStore.getAll().some(
+      j => j.bookTitle === detailBook.title && j.status !== "done" && j.status !== "error"
+    );
+    if (alreadyRunning) {
+      toast.info(`Already generating for "${detailBook.title}" — please wait.`);
+      return;
+    }
 
     toast.info(`Initialising resonance extraction for ${detailBook.title}...`);
     runFullSeriesGeneration(detailBook, toneTarget, () => {

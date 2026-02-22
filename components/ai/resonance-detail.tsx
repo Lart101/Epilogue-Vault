@@ -30,14 +30,15 @@ export function ResonanceDetail({
 
   const [selectedToneId, setSelectedToneId] = useState(initialTone);
   const [selectedSeason, setSelectedSeason] = useState(1);
-  // Initialised synchronously from the store so the first render is correct
-  // (avoids the Generate → Loading flicker on modal reopen)
-  const [isGenerating, setIsGenerating] = useState(() => {
+  // Tracks WHICH tone label is actively generating (null = nothing running).
+  // Per-tone (not per-book) so other tones remain clickable during generation.
+  const [generatingTone, setGeneratingTone] = useState<string | null>(() => {
     const bookTitle = book?.title;
-    if (!bookTitle) return false;
-    return generationStore.getAll().some(
+    if (!bookTitle) return null;
+    const activeJob = generationStore.getAll().find(
       j => j.bookTitle === bookTitle && j.status !== "done" && j.status !== "error"
     );
+    return activeJob?.tone ?? null;
   });
 
   const loadAllSeries = () => {
@@ -51,21 +52,21 @@ export function ResonanceDetail({
     loadAllSeries();
   }, [userId, book?.id]);
 
-  // Subscribe to generationStore to know if a tone for THIS book is in progress
+  // Subscribe to generationStore — tracks the tone label being generated for this book
   useEffect(() => {
     const unsub = generationStore.subscribe(jobs => {
       const bookTitle = book?.title;
       if (!bookTitle) return;
 
-      const prevGenerating = isGenerating;
-      const activeJobForBook = jobs.find(
+      const activeJob = jobs.find(
         j => j.bookTitle === bookTitle && j.status !== "done" && j.status !== "error"
       );
-      const nowGenerating = !!activeJobForBook;
-      setIsGenerating(nowGenerating);
+      const prevTone = generatingTone;
+      const nowTone = activeJob?.tone ?? null;
+      setGeneratingTone(nowTone);
 
-      // When a job finishes, refresh allSeries to pick up the new tone immediately
-      if (prevGenerating && !nowGenerating) {
+      // When any job for this book finishes, refresh allSeries
+      if (prevTone && !nowTone) {
         loadAllSeries();
       }
     });
@@ -239,17 +240,18 @@ export function ResonanceDetail({
                           </div>
                       );
                   }
+                  // Only THIS tone's button is disabled when it's the one generating
+                  const isThisToneGenerating = generatingTone === missingToneMeta?.label;
                   return (
                       <Button 
                         onClick={() => {
-                          setIsGenerating(true);
                           onGenerateTone(selectedToneId);
                         }}
-                        disabled={isGenerating}
+                        disabled={isThisToneGenerating}
                         className="bg-amber-500 hover:bg-amber-600 text-black font-bold h-12 shadow-lg shadow-amber-500/20 px-8 rounded-full"
                       >
-                        {isGenerating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
-                        {isGenerating ? "Synthesizing Echoes..." : `Generate ${missingToneMeta?.label} Chronicles`}
+                        {isThisToneGenerating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                        {isThisToneGenerating ? "Synthesizing Echoes..." : `Generate ${missingToneMeta?.label} Chronicles`}
                       </Button>
                   );
               })()}

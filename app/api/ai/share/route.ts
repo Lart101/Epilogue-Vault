@@ -21,14 +21,19 @@ export async function POST(req: NextRequest) {
         }
 
         const body = await req.json();
-        const { targetBookId, storeBookId, toneId } = body;
+        const { targetBookId, toneId, storeBookId, bookTitle, bookAuthor } = body;
 
-        if (!targetBookId || !storeBookId || !toneId) {
+        // Need targetBookId, toneId, and at least one book identifier
+        if (!targetBookId || !toneId || (!storeBookId && !bookTitle)) {
             return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
         }
 
-        // Attempt to find and copy shared artifacts
-        const success = await copySharedAiArtifacts(user.id, targetBookId, storeBookId, toneId);
+        const success = await copySharedAiArtifacts(
+            user.id,
+            targetBookId,
+            toneId,
+            { storeBookId, bookTitle, bookAuthor }
+        );
 
         return NextResponse.json({ success });
     } catch (error: any) {

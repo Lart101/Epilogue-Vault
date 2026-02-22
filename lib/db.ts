@@ -383,40 +383,80 @@ export async function addStoreBookToLibrary(
 export async function copySharedAiArtifacts(
     targetUid: string,
     targetBookId: string,
-    storeBookId: string,
-    tone: string
+    tone: string,
+    options: { storeBookId?: string; bookTitle?: string; bookAuthor?: string } = {}
 ): Promise<boolean> {
     if (!supabaseAdmin) {
         console.warn("Missing service role key, cannot search global resonance.");
         return false;
     }
 
-    // 1. Find all local book_ids that map to this public store book
-    const { data: relatedBooks } = await supabaseAdmin
-        .from("user_books")
-        .select("id")
-        .eq("store_book_id", storeBookId);
+    const { storeBookId, bookTitle, bookAuthor } = options;
+    let bookIds: string[] = [];
 
-    if (!relatedBooks || relatedBooks.length === 0) return false;
-    const bookIds = relatedBooks.map(b => b.id);
+    if (storeBookId) {
+        // Path A: Gutenberg / store book — match via store_book_id
+        const { data: relatedBooks } = await supabaseAdmin
+            .from("user_books")
+            .select("id")
+            .eq("store_book_id", storeBookId);
 
-    // 2. Find ONE shared "podcast-series" for these books matching the tone
-    const { data: seriesList } = await supabaseAdmin
+        bookIds = (relatedBooks ?? []).map(b => b.id);
+    } else if (bookTitle) {
+        // Path B: User-uploaded book — match by title (+ optional author)
+        let query = supabaseAdmin
+            .from("user_books")
+            .select("id")
+            .ilike("title", bookTitle);
+
+        if (bookAuthor) query = query.ilike("author", bookAuthor);
+
+        // Exclude the target book itself so we don't self-copy
+        const { data: relatedBooks } = await query.neq("id", targetBookId);
+        bookIds = (relatedBooks ?? []).map(b => b.id);
+    }
+
+    if (bookIds.length === 0) return false;
+
+    // ── Find source series — try _toneId first, fallback to tone label ─────────
+    let { data: seriesList } = await supabaseAdmin
         .from("ai_artifacts")
         .select("*")
         .eq("type", "podcast-series")
         .is("deleted_at", null)
         .in("book_id", bookIds)
-        .filter("content->>_toneId", "eq", tone) // Note: tone is passed as the ID (e.g., 'academic')
+        .filter("content->>_toneId", "eq", tone)
         .limit(1);
 
+    // Fallback: series saved before _toneId was embedded — match by tone label
+    if (!seriesList || seriesList.length === 0) {
+        const PODCAST_TONES_MAP: Record<string, string> = {
+            "philosophical": "Deep & Philosophical",
+            "true-crime": "True Crime Suspense",
+            "humorous": "Humorous & Witty",
+            "academic": "Academic & Analytical",
+            "casual": "Casual Banter",
+        };
+        const toneLabel = PODCAST_TONES_MAP[tone];
+        if (toneLabel) {
+            const { data: fallbackSeries } = await supabaseAdmin
+                .from("ai_artifacts")
+                .select("*")
+                .eq("type", "podcast-series")
+                .is("deleted_at", null)
+                .in("book_id", bookIds)
+                .filter("content->>tone", "eq", toneLabel)
+                .limit(1);
+            seriesList = fallbackSeries;
+        }
+    }
+
     const sourceSeries = seriesList?.[0];
-    if (!sourceSeries) return false; // No generation exists globally for this tone
+    if (!sourceSeries) return false;
 
-    const toneLabel = sourceSeries.content.tone; // e.g. "Philosophical"
+    const toneLabel = sourceSeries.content.tone;
 
-    // 3. Find all episodes ("podcast") that belong to the SAME source book_id and tone
-    //    Try matching on _toneId first (new format saved after the recent fix)
+    // ── Find source episodes — try _toneId first, fallback to title LIKE ──────
     let { data: sourceEpisodes } = await supabaseAdmin
         .from("ai_artifacts")
         .select("*")
@@ -425,9 +465,7 @@ export async function copySharedAiArtifacts(
         .eq("book_id", sourceSeries.book_id)
         .filter("content->>_toneId", "eq", tone);
 
-    // Fallback: for legacy data saved before _toneId was embedded, use title LIKE
     if (!sourceEpisodes || sourceEpisodes.length === 0) {
-        const toneLabel = sourceSeries.content.tone; // e.g. "Philosophical"
         const { data: fallbackEpisodes } = await supabaseAdmin
             .from("ai_artifacts")
             .select("*")
@@ -440,25 +478,46 @@ export async function copySharedAiArtifacts(
 
     if (!sourceEpisodes || sourceEpisodes.length === 0) return false;
 
-    // 4. Duplicate the series to the target user
-    await saveAiArtifact(targetUid, {
-        book_id: targetBookId,
-        type: "podcast-series",
-        title: sourceSeries.title,
-        content: sourceSeries.content,
-    });
+    // ── Copy series + episodes using service-role client (bypasses RLS) ────────
+    // IMPORTANT: must use supabaseAdmin here — the request has no user session,
+    // so the regular anon client would be blocked by RLS on insert.
+    const now = new Date().toISOString();
 
-    // 5. Duplicate all episodes to the target user
-    for (const ep of sourceEpisodes) {
-        await saveAiArtifact(targetUid, {
+    const { error: seriesInsertError } = await supabaseAdmin
+        .from("ai_artifacts")
+        .insert({
+            user_id: targetUid,
             book_id: targetBookId,
-            type: "podcast",
-            title: ep.title,
-            content: ep.content,
+            type: "podcast-series",
+            title: sourceSeries.title,
+            content: sourceSeries.content,
+            created_at: now,
         });
+
+    if (seriesInsertError) {
+        console.error("Global Resonance: failed to insert series:", seriesInsertError);
+        return false;
     }
 
-    return true; // Successfully copied!
+    const episodeRows = sourceEpisodes.map(ep => ({
+        user_id: targetUid,
+        book_id: targetBookId,
+        type: ep.type,
+        title: ep.title,
+        content: ep.content,
+        created_at: now,
+    }));
+
+    const { error: epInsertError } = await supabaseAdmin
+        .from("ai_artifacts")
+        .insert(episodeRows);
+
+    if (epInsertError) {
+        console.error("Global Resonance: failed to insert episodes:", epInsertError);
+        return false;
+    }
+
+    return true;
 }
 
 export async function saveAiArtifact(

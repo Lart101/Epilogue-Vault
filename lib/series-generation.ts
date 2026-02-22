@@ -38,8 +38,39 @@ export async function runFullSeriesGeneration(
     });
 
     try {
-        // ── 0. Attempt Global Resonance (Sharing) ─────────────────────────────
-        if (book.storeBookId) {
+        // ── 0a. LOCAL DUPLICATE CHECK ────────────────────────────────────────
+        // Before touching any AI model, check if THIS user already has a series
+        // for this exact book × tone. This is the cheapest possible guard.
+        {
+            const { data: existingSeries } = await supabase
+                .from("ai_artifacts")
+                .select("id")
+                .eq("type", "podcast-series")
+                .is("deleted_at", null)
+                .eq("book_id", book.id)
+                .filter("content->>_toneId", "eq", tone.id)
+                .limit(1);
+
+            if (existingSeries && existingSeries.length > 0) {
+                console.log(`[LocalDupe] User already has ${tone.label} series for "${book.title}", skipping generation.`);
+                generationStore.update(jobId, { status: "done", label: "Already in your Archive!" });
+                notificationStore.push({
+                    type: "success",
+                    title: `Already Generated`,
+                    body: `Your ${tone.label} series for "${book.title}" already exists.`,
+                    bookCover: book.coverUrl,
+                    bookTitle: book.title,
+                });
+                onSeriesOutlineDone?.({} as any);
+                return;
+            }
+        }
+
+        // ── 0b. Global Resonance (Sharing) ───────────────────────────────────
+        // Check if ANY other user has already generated this book × tone.
+        // Works for both Gutenberg books (via storeBookId) and user-uploaded
+        // books (via title + author matching).
+        {
             generationStore.update(jobId, { status: "extracting", label: "Searching global resonance..." });
 
             const { data: { session } } = await supabase.auth.getSession();
@@ -55,8 +86,11 @@ export async function runFullSeriesGeneration(
                         },
                         body: JSON.stringify({
                             targetBookId: book.id,
-                            storeBookId: book.storeBookId,
-                            toneId: tone.id
+                            toneId: tone.id,
+                            // Gutenberg book: match by storeBookId
+                            ...(book.storeBookId ? { storeBookId: book.storeBookId } : {}),
+                            // User-uploaded book: match by title + author
+                            ...(!book.storeBookId ? { bookTitle: book.title, bookAuthor: book.author } : {}),
                         })
                     });
 
@@ -72,11 +106,8 @@ export async function runFullSeriesGeneration(
                                 bookCover: book.coverUrl,
                                 bookTitle: book.title,
                             });
-
-                            // We trigger onSeriesOutlineDone with null or an empty structure, 
-                            // indicating the UI should just refetch all artifacts from DB
                             onSeriesOutlineDone?.({} as any);
-                            return; // STOP EXECUTION! Everything is already generated.
+                            return;
                         }
                     }
                 } catch (e) {
@@ -90,6 +121,7 @@ export async function runFullSeriesGeneration(
         let text = "";
         try {
             text = book.fileType === "epub"
+
                 ? await extractEpubText(book.fileUrl)
                 : await extractPdfText(book.fileUrl);
         } catch (e) {
