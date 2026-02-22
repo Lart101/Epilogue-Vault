@@ -15,7 +15,6 @@ import {
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { NotificationBell } from "@/components/ui/notification-bell";
 import { useState, useEffect } from "react";
 import { Magnetic } from "./ui/magnetic";
 import { useScroll, useSpring as useSpringMotion } from "framer-motion";
@@ -115,9 +114,6 @@ export function Navbar() {
         <div className="shrink-0 flex items-center gap-2 sm:gap-3">
           <div className="hidden sm:flex items-center gap-2">
             <Magnetic strength={0.3}>
-              <NotificationBell />
-            </Magnetic>
-            <Magnetic strength={0.3}>
               <ThemeToggle />
             </Magnetic>
           </div>
@@ -144,16 +140,10 @@ export function Navbar() {
               <DropdownMenuSeparator className="bg-border/20 mx-2" />
               
               <div className="md:hidden p-2 space-y-2">
-                 <div className="grid grid-cols-2 gap-2">
-                    <div className="flex items-center justify-between p-3 rounded-2xl bg-secondary/30 border border-border/10">
-                        <span className="text-[10px] font-bold uppercase tracking-wider">Alerts</span>
-                        <NotificationBell />
-                    </div>
-                    <div className="flex items-center justify-between p-3 rounded-2xl bg-secondary/30 border border-border/10">
-                        <span className="text-[10px] font-bold uppercase tracking-wider">Archive</span>
-                        <ThemeToggle />
-                    </div>
-                 </div>
+                  <div className="flex items-center justify-between p-3 rounded-2xl bg-secondary/30 border border-border/10">
+                    <span className="text-[10px] font-bold uppercase tracking-wider">Archive</span>
+                    <ThemeToggle />
+                  </div>
               </div>
 
               <DropdownMenuItem
