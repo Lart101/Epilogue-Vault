@@ -56,6 +56,12 @@ class GenerationStore {
         return Array.from(this.jobs.values());
     }
 
+    /** Returns true if any generation job is currently in-flight (not done/error). */
+    hasActiveGeneration(): boolean {
+        const ACTIVE: JobStatus[] = ["pending", "extracting", "planning", "generating"];
+        return Array.from(this.jobs.values()).some(j => ACTIVE.includes(j.status));
+    }
+
     clear() {
         this.jobs.clear();
         this.notify();

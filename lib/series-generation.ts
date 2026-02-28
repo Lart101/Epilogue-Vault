@@ -8,7 +8,7 @@
 
 import { extractEpubText, extractPdfText } from "@/lib/extractors";
 import { generateEpisodeScript, generateSeriesOutline, PODCAST_TONES, PodcastSeries } from "@/lib/gemini";
-import { saveAiArtifact, UserBook } from "@/lib/db";
+import { saveAiArtifact, UserBook, getPodcastGenerationsToday, DAILY_PODCAST_LIMIT } from "@/lib/db";
 import { supabase } from "@/lib/supabase";
 import { generationStore } from "@/lib/generation-store";
 import { notificationStore } from "@/lib/notification-store";
@@ -33,12 +33,48 @@ export async function runFullSeriesGeneration(
         bookTitle: book.title,
         bookCover: book.coverUrl,
         tone: tone.label,
-        status: "extracting", // Initial status
+        status: "extracting",
         label: "Checking archives...",
     });
 
     try {
-        // ── 0a. LOCAL DUPLICATE CHECK ────────────────────────────────────────
+        // ── 0. DAILY LIMIT PRE-CHECK ─────────────────────────────────────────
+        // Fast client-side check before doing any heavy lifting.
+        // The server route is the authoritative gate — this is for UX speed.
+        {
+            const usedToday = await getPodcastGenerationsToday(book.user_id);
+            if (usedToday >= DAILY_PODCAST_LIMIT) {
+                generationStore.update(jobId, { status: "error", label: "Daily limit reached — come back tomorrow!" });
+                notificationStore.push({
+                    type: "error",
+                    title: "Daily Limit Reached",
+                    body: `You can generate 1 new podcast per day. Your limit resets at midnight UTC.`,
+                    bookCover: book.coverUrl,
+                    bookTitle: book.title,
+                });
+                return;
+            }
+        }
+
+        // ── 0b. CONCURRENT GENERATION LOCK ───────────────────────────────────
+        // Only one series can be generated at a time. Check if any OTHER job is
+        // already in-flight before allowing this one to proceed.
+        {
+            const otherActive = generationStore.getAll().some(
+                j => j.id !== jobId && ["pending", "extracting", "planning", "generating"].includes(j.status)
+            );
+            if (otherActive) {
+                generationStore.remove(jobId);
+                notificationStore.push({
+                    type: "error",
+                    title: "Generation In Progress",
+                    body: `Please wait for the current generation to finish before starting a new one.`,
+                    bookCover: book.coverUrl,
+                    bookTitle: book.title,
+                });
+                return;
+            }
+        }
         // Before touching any AI model, check if THIS user already has a series
         // for this exact book × tone. This is the cheapest possible guard.
         {
@@ -134,7 +170,10 @@ export async function runFullSeriesGeneration(
         // ── 2. Generate series outline (with smart truncation) ──────────────────
         generationStore.update(jobId, { status: "planning", label: "Architecting series..." });
         const optimizedText = optimizeForOutline(text);
-        const outline = await generateSeriesOutline(book.title, book.author, optimizedText, tone.label);
+        const outline = await generateSeriesOutline(
+            book.title, book.author, optimizedText, tone.label,
+            { bookId: book.id, toneId: tone.id }
+        );
         const outlineWithTone = { ...outline, tone: tone.label, _toneId: tone.id };
 
         await saveAiArtifact(book.user_id, {
@@ -243,6 +282,7 @@ export async function runFullSeriesGeneration(
         });
     } catch (err: any) {
         let msg = err.message || "Generation failed.";
+        if (msg.startsWith("DAILY_LIMIT_REACHED")) msg = "Daily limit reached — come back tomorrow!";
         if (msg.includes("503") || msg.toLowerCase().includes("overwhelmed")) msg = "Service busy — try again shortly.";
         if (msg.includes("429") || msg.toLowerCase().includes("quota")) msg = "Rate limit reached — wait and retry.";
 

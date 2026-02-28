@@ -645,3 +645,46 @@ export async function getTrashedAiArtifacts(uid: string): Promise<AiArtifact[]> 
     if (error) return [];
     return (data || []).map(mapAiArtifact);
 }
+
+// ─── Podcast Daily Generation Limit ────────────────────────────────────────
+
+export const DAILY_PODCAST_LIMIT = 1;
+
+/**
+ * Returns how many new podcast series this user has generated today (UTC).
+ * Counts rows in `podcast_generation_log` for today's UTC date.
+ */
+export async function getPodcastGenerationsToday(uid: string): Promise<number> {
+    const todayUtc = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+    const { count, error } = await supabase
+        .from("podcast_generation_log")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", uid)
+        .eq("generation_date", todayUtc);
+
+    if (error) {
+        console.warn("[PodcastLimit] Failed to check daily count:", error);
+        return 0; // fail open — don't block if the check itself errors
+    }
+    return count ?? 0;
+}
+
+/**
+ * Logs a successful new podcast series generation for the current user.
+ * Call this ONCE per series generation (not per episode).
+ */
+export async function recordPodcastGeneration(
+    uid: string,
+    bookId: string,
+    toneId: string
+): Promise<void> {
+    const todayUtc = new Date().toISOString().slice(0, 10);
+    const { error } = await supabase
+        .from("podcast_generation_log")
+        .insert({ user_id: uid, book_id: bookId, tone_id: toneId, generation_date: todayUtc });
+
+    if (error) {
+        console.error("[PodcastLimit] Failed to record generation:", error);
+        // Don't throw — logging failure shouldn't break the UX
+    }
+}

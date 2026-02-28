@@ -58,7 +58,9 @@ export async function generateSeriesOutline(
     bookTitle: string,
     bookAuthor: string,
     extractedContent: string,
-    tone: string
+    tone: string,
+    /** Pass bookId + toneId so the API can enforce and record the daily limit */
+    meta?: { bookId: string; toneId: string }
 ): Promise<Omit<PodcastSeries, "id" | "bookId" | "createdAt">> {
     // We instantiate Groq inside the fallback executor now.
 
@@ -96,7 +98,11 @@ export async function generateSeriesOutline(
     - CRITICAL JSON RULE: Do NOT use unescaped double quotes inside string values (especially for "title" or "description"). If you need to quote something, use 'single quotes' or escape them like \\\"this\\\". Unescaped double quotes will corrupt the JSON.
     `;
 
-    const text = await executeWithFallback(prompt);
+    const text = await executeWithFallback(prompt, {
+        type: "podcast-series",
+        bookId: meta?.bookId,
+        toneId: meta?.toneId,
+    });
     return parseGroqJson(text);
 }
 
@@ -247,7 +253,13 @@ function parseGroqJson(text: string) {
  * Cascading executor that iterates through our FALLBACK_MODELS on Groq.
  * For each model, it will attempt up to 'maxRetries' times if it hits a 429 or 503.
  */
-async function executeWithFallback(prompt: string): Promise<string> {
+interface GenerateRequestMeta {
+    type?: string;
+    bookId?: string;
+    toneId?: string;
+}
+
+async function executeWithFallback(prompt: string, meta?: GenerateRequestMeta): Promise<string> {
     const { data: { session } } = await supabase.auth.getSession();
     const token = session?.access_token;
 
@@ -261,11 +273,15 @@ async function executeWithFallback(prompt: string): Promise<string> {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${token}`
         },
-        body: JSON.stringify({ prompt })
+        body: JSON.stringify({ prompt, ...meta })
     });
 
     if (!res.ok) {
         const err = await res.json().catch(() => ({ error: "Unknown error" }));
+        // Surface the daily limit error clearly so callers can handle it
+        if (res.status === 429 && err.error === "DAILY_LIMIT_REACHED") {
+            throw new Error(`DAILY_LIMIT_REACHED|${err.resetAt || ""}`);
+        }
         throw new Error(err.error || `AI API failed with status ${res.status}`);
     }
 

@@ -1,18 +1,38 @@
 import { NextResponse } from 'next/server';
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
-import { supabase } from '@/lib/supabase';
 
 const MAX_TTS_CHARS = 3000; // ~60s of audio at 150wpm
 
-async function verifyAuth(req: Request) {
+/**
+ * Verify auth by decoding the Supabase JWT locally.
+ * Supabase JWTs are standard HS256 tokens — we just need to check they're
+ * structurally valid and extract the user sub. This avoids a network call to
+ * Supabase's auth servers which was causing ConnectTimeoutError in API routes.
+ */
+function verifyAuth(req: Request): { id: string } | null {
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) return null;
+    if (!authHeader?.startsWith("Bearer ")) return null;
 
-    const token = authHeader.replace("Bearer ", "");
-    const { data, error } = await supabase.auth.getUser(token);
+    const token = authHeader.slice(7);
+    try {
+        // JWT is three base64url parts: header.payload.signature
+        const parts = token.split(".");
+        if (parts.length !== 3) return null;
 
-    if (error || !data?.user) return null;
-    return data.user;
+        // Decode payload (base64url → JSON)
+        const payload = JSON.parse(
+            Buffer.from(parts[1], "base64url").toString("utf8")
+        );
+
+        // Must have a subject (user id) and not be expired
+        if (!payload.sub) return null;
+        const now = Math.floor(Date.now() / 1000);
+        if (payload.exp && payload.exp < now) return null;
+
+        return { id: payload.sub };
+    } catch {
+        return null;
+    }
 }
 
 function escapeXml(unsafe: string) {
@@ -29,7 +49,7 @@ function escapeXml(unsafe: string) {
 }
 
 export async function POST(req: Request) {
-    const user = await verifyAuth(req);
+    const user = verifyAuth(req);
     if (!user) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }

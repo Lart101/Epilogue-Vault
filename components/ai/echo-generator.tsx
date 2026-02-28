@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { UserBook, getUserAiArtifacts } from "@/lib/db";
+import { UserBook, getUserAiArtifacts, getPodcastGenerationsToday, DAILY_PODCAST_LIMIT } from "@/lib/db";
 import {
   generateEpisodeScript,
   PODCAST_TONES, type PodcastScript, type PodcastSeries, type Episode,
 } from "@/lib/gemini";
 import { saveAiArtifact } from "@/lib/db";
 import { runFullSeriesGeneration, retryFailedEpisodes } from "@/lib/series-generation";
+import { generationStore } from "@/lib/generation-store";
 import { playerStore } from "@/lib/player-store";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -55,6 +56,36 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
   const [isPlaying, setIsPlaying] = useState(false);
   const [isGeneratingEpisode, setIsGeneratingEpisode] = useState(false);
   const [episodeError, setEpisodeError] = useState<string | null>(null);
+
+  // ─── Daily generation limit ───────────────────────────────────────────────
+  const [generationsToday, setGenerationsToday] = useState<number>(0);
+  const [isLimitLoading, setIsLimitLoading] = useState(true);
+
+  useEffect(() => {
+    getPodcastGenerationsToday(book.user_id)
+      .then(count => setGenerationsToday(count))
+      .catch(() => setGenerationsToday(0))
+      .finally(() => setIsLimitLoading(false));
+  }, [book.user_id]);
+
+  const isDailyLimitReached = !isLimitLoading && generationsToday >= DAILY_PODCAST_LIMIT;
+
+  // ─── Concurrent generation lock ───────────────────────────────────────────
+  const [isGenerationActive, setIsGenerationActive] = useState(() =>
+    generationStore.hasActiveGeneration()
+  );
+
+  useEffect(() => {
+    // Subscribe to store updates so the button state is always in sync
+    const unsub = generationStore.subscribe(jobs => {
+      const ACTIVE = ["pending", "extracting", "planning", "generating"];
+      setIsGenerationActive(jobs.some(j => ACTIVE.includes(j.status)));
+    });
+    return () => { unsub(); };
+  }, []);
+
+  // Button is disabled if limit reached OR another generation is running
+  const isSummonDisabled = isDailyLimitReached || isGenerationActive;
 
   const synthRef = useRef<SpeechSynthesis | null>(null);
 
@@ -289,6 +320,70 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
                 </p>
               </div>
 
+              {/* ── Daily Generation Quota Card ── */}
+              <div className={cn(
+                "flex items-center gap-4 px-5 py-4 rounded-2xl border transition-all duration-300",
+                isDailyLimitReached
+                  ? "border-destructive/30 bg-destructive/5"
+                  : isGenerationActive
+                  ? "border-amber-500/30 bg-amber-500/5"
+                  : "border-border/50 bg-card/30"
+              )}>
+                {/* Circular counter */}
+                <div className="relative flex-shrink-0 w-12 h-12">
+                  <svg className="w-12 h-12 -rotate-90" viewBox="0 0 36 36">
+                    <circle cx="18" cy="18" r="15.9" fill="none" stroke="currentColor"
+                      className="text-border/30" strokeWidth="2.5" />
+                    <circle cx="18" cy="18" r="15.9" fill="none" strokeWidth="2.5"
+                      strokeDasharray={`${isLimitLoading ? 0 : (1 - generationsToday / DAILY_PODCAST_LIMIT) * 100} 100`}
+                      strokeLinecap="round"
+                      className={cn(
+                        "transition-all duration-700",
+                        isDailyLimitReached ? "text-destructive" : "text-amber-500"
+                      )}
+                      stroke="currentColor"
+                    />
+                  </svg>
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <span className={cn(
+                      "text-[11px] font-black font-mono leading-none",
+                      isDailyLimitReached ? "text-destructive" : "text-foreground"
+                    )}>
+                      {isLimitLoading ? "…" : `${generationsToday}/${DAILY_PODCAST_LIMIT}`}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Text */}
+                <div className="flex-1 min-w-0">
+                  <p className={cn(
+                    "text-sm font-bold leading-tight",
+                    isDailyLimitReached ? "text-destructive" : "text-foreground"
+                  )}>
+                    {isDailyLimitReached
+                      ? "Daily limit reached"
+                      : isGenerationActive
+                      ? "Generation in progress…"
+                      : "Ready to generate"}
+                  </p>
+                  <p className="text-xs text-muted-foreground font-serif italic mt-0.5 leading-relaxed">
+                    {isDailyLimitReached
+                      ? "1 podcast per day per account. Resets at midnight UTC."
+                      : isGenerationActive
+                      ? "Please wait for the current generation to finish."
+                      : `1 podcast generation per day per account — ${DAILY_PODCAST_LIMIT - generationsToday} remaining today.`}
+                  </p>
+                </div>
+
+                {/* Status dot */}
+                <div className={cn(
+                  "w-2.5 h-2.5 rounded-full flex-shrink-0",
+                  isDailyLimitReached ? "bg-destructive" :
+                  isGenerationActive ? "bg-amber-500 animate-pulse" :
+                  "bg-green-500"
+                )} />
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {PODCAST_TONES.map((tone) => {
                   const Icon = TONE_ICONS[tone.id] || Mic2;
@@ -330,7 +425,13 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
                 </p>
                 <Button
                   onClick={handleSummonKeepers}
-                  className="h-11 px-8 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white shadow-xl shadow-amber-500/20 gap-2 group"
+                  disabled={isSummonDisabled}
+                  className={cn(
+                    "h-11 px-8 rounded-2xl text-white shadow-xl gap-2 group transition-all",
+                    isSummonDisabled
+                      ? "bg-muted text-muted-foreground shadow-none cursor-not-allowed"
+                      : "bg-amber-500 hover:bg-amber-600 shadow-amber-500/20"
+                  )}
                 >
                   <Headphones className="w-4 h-4" />
                   Summon Keepers
@@ -579,15 +680,24 @@ export function EchoGenerator({ book, onClose, initialScript, initialSeries }: E
 
               {/* Controls */}
               <div className="flex items-center justify-center gap-6">
-                <button onClick={() => { const p = Math.max(0, currentLineIndex - 1); setCurrentLineIndex(p); if (isPlaying) playLine(p); }}
+                <button
+                  aria-label="Previous line"
+                  title="Previous line"
+                  onClick={() => { const p = Math.max(0, currentLineIndex - 1); setCurrentLineIndex(p); if (isPlaying) playLine(p); }}
                   className="w-11 h-11 rounded-full border border-border/40 flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-foreground/40 transition-all">
                   <SkipBack className="w-4 h-4 fill-current" />
                 </button>
-                <button onClick={togglePlay}
+                <button
+                  aria-label={isPlaying ? "Pause" : "Play"}
+                  title={isPlaying ? "Pause" : "Play"}
+                  onClick={togglePlay}
                   className="w-16 h-16 rounded-full bg-amber-500 hover:bg-amber-600 flex items-center justify-center text-white shadow-2xl shadow-amber-500/30 hover:scale-105 transition-all">
                   {isPlaying ? <Pause className="w-6 h-6 fill-current" /> : <Play className="w-6 h-6 fill-current ml-0.5" />}
                 </button>
-                <button onClick={() => { const n = Math.min(script.dialogue.length - 1, currentLineIndex + 1); setCurrentLineIndex(n); if (isPlaying) playLine(n); }}
+                <button
+                  aria-label="Next line"
+                  title="Next line"
+                  onClick={() => { const n = Math.min(script.dialogue.length - 1, currentLineIndex + 1); setCurrentLineIndex(n); if (isPlaying) playLine(n); }}
                   className="w-11 h-11 rounded-full border border-border/40 flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-foreground/40 transition-all">
                   <SkipForward className="w-4 h-4 fill-current" />
                 </button>
